@@ -1,20 +1,18 @@
-"""Headless command-line entry point.
-
-At milestone 0 there is no world and no life yet, so this only resolves and reports the
-configuration. It exists now so that the argument surface (config dir, planet file, seed,
-overrides) is fixed early -- every later milestone, the parameter sweeps, and the
-directional-selection tests all drive the simulation through this interface.
-"""
+"""Headless command-line entry point."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+
+import numpy as np
 
 from evosim import __version__
 from evosim.config import DEFAULT_CONFIG_DIR, Config, ConfigError
 from evosim.rng import STREAM_NAMES, RngBundle
+from evosim.world import World
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--ticks",
         type=int,
         default=0,
-        help="number of simulated days to run (milestone 0: accepted but not yet simulated)",
+        help="number of simulated days to run",
     )
     parser.add_argument(
         "--out",
@@ -81,6 +79,9 @@ def resolve_config(args: argparse.Namespace) -> Config:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.ticks < 0:
+        print("argument error: --ticks must be non-negative", file=sys.stderr)
+        return 2
 
     try:
         config = resolve_config(args)
@@ -89,6 +90,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     rng = RngBundle(config.sim.seed)
+    world = World.create(config.planet, rng)
+    world.step(args.ticks)
 
     planet = config.planet
     print(f"evosim {__version__}")
@@ -108,17 +111,34 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  genome             : {config.genome.n_loci} loci")
     print(f"  founders           : {config.sim.initial_population} in "
           f"{config.sim.initial_habitat}")
+    print(f"  simulated day      : {world.day}")
+    print(f"  actual land        : {world.terrain.land.mean():.1%}")
+    print(
+        "  temperature        : "
+        f"{world.climate.temperature_c.min():.1f} to "
+        f"{world.climate.temperature_c.max():.1f} C"
+    )
 
-    if args.ticks:
-        print(
-            f"\nmilestone 0: no world or life is implemented yet, so --ticks {args.ticks} "
-            "was not simulated.",
-            file=sys.stderr,
-        )
     if args.out:
-        print(f"milestone 0: --out {args.out} was accepted but nothing is written yet.",
-              file=sys.stderr)
+        _write_world(args.out, config, world)
+        print(f"  output             : {args.out.resolve()}")
     return 0
+
+
+def _write_world(output_dir: Path, config: Config, world: World) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(output_dir / "world.npz", day=world.day, **world.arrays())
+    metadata = {
+        "format": 1,
+        "config_fingerprint": config.fingerprint(),
+        "seed": config.sim.seed,
+        "planet": config.planet.name,
+        "day": world.day,
+        "shape": list(world.grid.shape),
+    }
+    with (output_dir / "world.json").open("w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, indent=2, sort_keys=True)
+        handle.write("\n")
 
 
 if __name__ == "__main__":  # pragma: no cover

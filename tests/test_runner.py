@@ -44,6 +44,17 @@ def test_bad_override_exits_with_code_2_and_a_message(capsys):
     assert "configuration error" in capsys.readouterr().err
 
 
-def test_ticks_is_accepted_but_reported_as_unimplemented(capsys):
+def test_ticks_advance_the_world(capsys):
     assert main(["--ticks", "100"]) == 0
-    assert "not simulated" in capsys.readouterr().err
+    assert "simulated day      : 100" in capsys.readouterr().out
+
+
+def test_negative_ticks_fail(capsys):
+    assert main(["--ticks", "-1"]) == 2
+    assert "must be non-negative" in capsys.readouterr().err
+
+
+def test_out_writes_world_state(tmp_path):
+    assert main(["--ticks", "3", "--out", str(tmp_path)]) == 0
+    assert (tmp_path / "world.npz").is_file()
+    assert (tmp_path / "world.json").is_file()

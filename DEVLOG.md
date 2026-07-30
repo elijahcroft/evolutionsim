@@ -5,6 +5,74 @@ and what the next task is.
 
 ---
 
+## Milestone 1 — the world
+
+**Status: complete.** 92 tests passing.
+
+### Completed
+
+- **`src/evosim/world/grid.py` — contained geometry.** Cell-centred latitude/longitude,
+  east-west wrapping neighbours, closed polar edges, and cosine latitude area weights live
+  behind one API. Resource capacity uses those weights, so geometrically tiny polar cells do
+  not receive equatorial resource amounts. Later layers do not need to know which grid
+  projection produced an index.
+
+- **`terrain.py` — deterministic procedural topography.** Layered value noise consumes only
+  the named `terrain` RNG stream, is periodic across the longitude seam, and is ranked and
+  rescaled around sea level to hit `terrain.land_fraction` to within one cell. Elevation and
+  local ruggedness are exposed as arrays; rugged ocean cells drive the configured upwelling
+  bonus.
+
+- **`climate.py` — seasonal physical fields.** Daily-mean insolation integrates latitude,
+  axial tilt, orbital phase, solar constant, and day length, including polar day and night.
+  Temperature relaxes toward the radiative/lapse-rate equilibrium using separate configured
+  land and water inertia. Ocean moisture is saturated; land moisture decays with distance
+  from water and is limited by insolation-driven evaporation.
+
+- **`resources.py` — renewable pools.** Nutrient capacities differ over land and water and
+  are area-weighted. Regrowth responds to moisture on land and upwelling at sea. Detritus
+  returns to nutrients with the configured temperature-dependent Q10 decay. Every update is
+  clipped to preserve non-negative, capacity-bounded pools.
+
+- **`world.py` — the environment boundary.** `World.create(planet_config, rng)` builds every
+  field reproducibly; `World.step()` advances climate and resources one simulated day at a
+  time. Static toxicity includes the configured highland coupling. Named arrays can be
+  consumed without importing terrain or grid internals.
+
+- **Headless use and diagnostics.** `evosim --ticks N` now advances the world, and `--out`
+  writes compressed `world.npz` fields plus traceable `world.json` metadata. The new
+  `tools/render_world.py` produces six-panel matplotlib maps for elevation, temperature,
+  insolation, moisture, nutrients, and detritus.
+
+- **Acceptance coverage.** Tests pin longitude wrapping and polar edges, cosine area weights,
+  exact land fraction, terrain seed determinism, cold poles, zero-tilt seasonal invariance,
+  stronger continental than maritime seasonality at high tilt, saturated oceans,
+  non-negative resources, output files, and whole-world reproducibility.
+
+### Consequences and known limitations
+
+- The world remains a single surface layer on a 128x64 equirectangular grid by design.
+  Underwater depth habitats and an icosahedral grid remain contained future changes, but are
+  not part of M1.
+- Climate is deterministic seasonal climate, not stochastic weather. The reserved `climate`
+  RNG stream is intentionally untouched, so later weather can be added without shifting
+  terrain or biological random streams.
+- Moisture is a distance/insolation proxy, not atmospheric circulation. Terrain does not yet
+  create rain shadows, winds, currents, ice sheets, or river transport.
+- Nutrient and detritus coefficients now operate as written but cannot be ecologically tuned
+  until organisms consume and return material. Their current values remain principled first
+  guesses.
+- `world.npz` is a diagnostic field dump, not a resume snapshot. Full simulation snapshots
+  must also capture populations, history, and every RNG stream in a later milestone.
+
+### Next task — Milestone 2: life substrate
+
+Build the vectorised genome/phenotype/population representation and seed the configured founder
+population into valid habitat. Body geometry remains behind `phenotype.py`, and hot-path
+population work must operate on arrays rather than per-organism Python loops.
+
+---
+
 ## Side spike — 3D morphology (not a milestone)
 
 Requested during M0. ej wants evolvable 3D body plans eventually; this is a **throwaway demo**
