@@ -1,0 +1,28 @@
+# Simulation engine settings: scale, scheduling, and bookkeeping cadence.
+# Nothing biological or planetary lives here.
+
+seed: 42
+
+# Hard ceiling on simultaneously living organisms. Arrays are preallocated to this size, so it
+# is a memory/performance budget, not a biological statement. When the cap is hit, reproduction
+# is throttled (recorded as a `capacity_throttle` event) rather than silently dropping births --
+# a run that spends time at the cap is not measuring natural carrying capacity and must say so.
+max_population: 40000
+
+# Founder population: how many identical-genome organisms are seeded, and where.
+initial_population: 800
+# "water" | "land" | "any" -- the seed lineage is aquatic by default.
+initial_habitat: water
+
+# Bookkeeping cadence, in ticks (1 tick = 1 simulated day). Species assignment and time-series
+# sampling are O(population * loci) with a k-means inside, far too expensive to run every tick.
+# These intervals trade history resolution against speed.
+taxonomy_interval: 100
+sample_interval: 100
+
+# How many ticks a species must be at zero population before extinction is declared. Guards
+# against declaring extinction on a transient dip.
+extinction_confirm_ticks: 300
+
+# Full-state snapshots for resume/rewind, in ticks. 0 disables.
+snapshot_interval: 0

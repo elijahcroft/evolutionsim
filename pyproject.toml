@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evosim"
+version = "0.0.1"
+description = "A scientifically grounded, individual-based evolution sandbox."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+viz = ["matplotlib>=3.8"]        # tools/render_world.py, milestone 1
+server = ["fastapi>=0.110", "uvicorn>=0.29"]   # milestone 6
+
+[project.scripts]
+evosim = "evosim.runner:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "biology: slow scenario tests asserting directional selection (deselect with '-m \"not biology\"')",
+    "slow: long-running determinism or performance tests",
+]

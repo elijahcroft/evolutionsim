@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>evosim spike — procedural morphology</title>
+<style>
+  :root {
+    --bg: #0d1013; --panel: #161b20; --line: #262e36;
+    --ink: #e6edf3; --dim: #8b98a5; --accent: #6ee7a8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink); overflow: hidden;
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-columns: 1fr 300px; height: 100vh;
+  }
+  #stage { position: relative; min-width: 0; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+
+  #overlay {
+    position: absolute; top: 0; left: 0; right: 0; padding: 12px 16px;
+    pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.8);
+  }
+  #overlay h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .01em; }
+  #overlay p { margin: 2px 0 0; color: var(--dim); font-size: 12px; max-width: 62ch; }
+  #lineage { color: var(--accent); }
+  #thumbhint {
+    position: absolute; left: 16px; bottom: calc(30% + 8px);
+    color: var(--dim); font-size: 11px; pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,.8);
+  }
+
+  aside {
+    background: var(--panel); border-left: 1px solid var(--line);
+    overflow-y: auto; padding: 14px;
+  }
+  aside h2 {
+    margin: 0 0 10px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--dim); font-weight: 600;
+  }
+  aside h2:not(:first-child) { margin-top: 20px; }
+  .row { display: grid; grid-template-columns: 1fr auto; gap: 4px; margin-bottom: 9px; }
+  .row label { grid-column: 1; font-size: 12px; color: var(--ink); }
+  .row output { grid-column: 2; font-size: 11px; color: var(--dim);
+                font-variant-numeric: tabular-nums; }
+  .row input { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: var(--accent); }
+  .buttons { display: grid; gap: 6px; }
+  button {
+    font: inherit; padding: 7px 10px; border-radius: 6px; cursor: pointer;
+    background: #202932; color: var(--ink); border: 1px solid var(--line);
+  }
+  button:hover { background: #28333e; }
+  button.primary { background: var(--accent); color: #06120c; border-color: var(--accent);
+                   font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); }
+  label.check { display: flex; gap: 7px; align-items: center; color: var(--dim);
+                font-size: 12px; cursor: pointer; }
+  pre {
+    margin: 0; padding: 8px; background: #0d1116; border: 1px solid var(--line);
+    border-radius: 6px; font-size: 10.5px; line-height: 1.45; color: var(--dim);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .note { color: var(--dim); font-size: 11.5px; margin: 0 0 10px; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="gl"></canvas>
+  <div id="overlay">
+    <h1>Procedural morphology spike</h1>
+    <p>
+      The large creature is the parent; the six below are its mutant offspring.
+      Click an offspring to make it the parent — that walks a lineage under your selection.
+      Drag to orbit. <span id="lineage">generation 0</span>
+    </p>
+  </div>
+  <div id="thumbhint">offspring — click to select</div>
+</div>
+
+<aside>
+  <h2>Lineage</h2>
+  <div class="buttons">
+    <button class="primary" id="respawn">New offspring (same parent)</button>
+    <button id="reset">Reset to founder</button>
+  </div>
+  <p class="note" style="margin-top:10px">
+    The founder is a plain green blob: no limbs, no head, no segments. Everything else you
+    see appear is mutation plus your selection.
+  </p>
+  <label class="check"><input type="checkbox" id="spin" checked> auto-rotate</label>
+
+  <h2>Mutation</h2>
+  <div class="row">
+    <label for="rate">strength</label><output id="rate-out"></output>
+    <input type="range" id="rate" min="0" max="3" step="0.05" value="1">
+  </div>
+
+  <h2>Parent genes</h2>
+  <div id="genes"></div>
+
+  <h2>Gene vector</h2>
+  <pre id="dump"></pre>
+</aside>
+
+<script>
+"use strict";
+/* =====================================================================================
+ * evosim spike: procedural creature morphology
+ *
+ * THROWAWAY. This is not part of the simulation and must never be imported by it. Its only
+ * job is to answer questions that are hard to answer on paper before committing to a
+ * morphology genome in a later milestone:
+ *
+ *   1. Which morphology genes actually earn their place? (Which sliders produce a
+ *      recognisably different animal, and which just add noise?)
+ *   2. Do SMALL mutations produce plausible, varied bodies -- i.e. is morphology space
+ *      smooth enough for gradual evolution, or does it fall off a cliff into garbage?
+ *   3. Can a lineage be walked by selection from a simple blob to something complex?
+ *
+ * Deliberately absent: any energy cost, any fitness, any simulation. Selection here is your
+ * mouse. In the real thing, morphology must feed the cost equations or it is decoration.
+ *
+ * No dependencies: raw WebGL2, hand-rolled matrix math and mesh generation.
+ * ===================================================================================== */
+
+/* ---- seeded RNG (mulberry32) ------------------------------------------------------- */
+/* Even a spike uses a seeded generator, so a surprising creature can be reproduced. */
+function makeRng(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function gaussian(rng) {
+  // Box-Muller. Mutation is Gaussian here for the same reason it is in the sim: most
+  // mutations should be small nudges, with occasional larger ones.
+  let u = 0, v = 0;
+  while (u === 0) u = rng();
+  while (v === 0) v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+/* ---- gene definitions -------------------------------------------------------------- */
+/* `int: true` genes mutate by discrete steps; the rest drift continuously. `sigma` is in
+   gene units, chosen so one mutation is a visible but not violent change. */
+const GENES = [
+  { key: "body_length",     label: "body length",      min: 0.4, max: 6.0,  init: 1.0,  sigma: 0.22 },
+  { key: "body_radius",     label: "body radius",      min: 0.06, max: 0.9, init: 0.42, sigma: 0.04 },
+  { key: "fullness",        label: "fullness",         min: 0.15, max: 1.6, init: 0.9,  sigma: 0.08 },
+  { key: "taper",           label: "taper (tail↔head)", min: -1,  max: 1,   init: 0.0,  sigma: 0.10 },
+  { key: "arch",            label: "spine arch",       min: -1,  max: 1,    init: 0.0,  sigma: 0.10 },
+  { key: "segment_count",   label: "segments",         min: 1,   max: 14,   init: 1,    sigma: 1, int: true },
+  { key: "segment_depth",   label: "segment depth",    min: 0,   max: 1,    init: 0.0,  sigma: 0.10 },
+  { key: "radial_symmetry", label: "radial symmetry",  min: 1,   max: 6,    init: 1,    sigma: 1, int: true },
+  { key: "limb_pairs",      label: "limb pairs",       min: 0,   max: 6,    init: 0,    sigma: 1, int: true },
+  { key: "limb_length",     label: "limb length",      min: 0.1, max: 2.0,  init: 0.45, sigma: 0.10 },
+  { key: "limb_thickness",  label: "limb thickness",   min: 0.02, max: 0.3, init: 0.08, sigma: 0.02 },
+  { key: "limb_splay",      label: "limb splay",       min: 0,   max: 1,    init: 0.35, sigma: 0.09 },
+  { key: "limb_droop",      label: "limb droop",       min: 0,   max: 1,    init: 0.3,  sigma: 0.09 },
+  { key: "limb_segments",   label: "limb joints",      min: 1,   max: 4,    init: 2,    sigma: 1, int: true },
+  { key: "head_size",       label: "head size",        min: 0,   max: 1.2,  init: 0.0,  sigma: 0.09 },
+  { key: "eye_size",        label: "eye size",         min: 0,   max: 0.35, init: 0.0,  sigma: 0.03 },
+  { key: "tail_length",     label: "tail length",      min: 0,   max: 2.5,  init: 0.0,  sigma: 0.13 },
+  { key: "dorsal_fin",      label: "dorsal fin",       min: 0,   max: 1.0,  init: 0.0,  sigma: 0.09 },
+  { key: "hue",             label: "hue",              min: 0,   max: 1,    init: 0.33, sigma: 0.04 },
+];
+const GENE_BY_KEY = Object.fromEntries(GENES.map((g) => [g.key, g]));
+
+function founderGenes() {
+  const g = {};
+  for (const spec of GENES) g[spec.key] = spec.init;
+  return g;
+}
+
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+function mutate(parent, rng, strength) {
+  const child = {};
+  for (const spec of GENES) {
+    let v = parent[spec.key];
+    if (spec.int) {
+      // Discrete genes step by +/-1 with a probability scaled by strength, so limb count
+      // changes are rare events rather than continuous drift.
+      if (rng() < 0.28 * strength) v += rng() < 0.5 ? -1 : 1;
+    } else {
+      v += gaussian(rng) * spec.sigma * strength;
+    }
+    child[spec.key] = clamp(spec.int ? Math.round(v) : v, spec.min, spec.max);
+  }
+  return child;
+}
+
+/* ---- tiny vector / matrix helpers -------------------------------------------------- */
+const V = {
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
+  cross: (a, b) => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ],
+  len: (a) => Math.hypot(a[0], a[1], a[2]),
+  norm(a) {
+    const l = Math.hypot(a[0], a[1], a[2]);
+    return l > 1e-9 ? [a[0] / l, a[1] / l, a[2] / l] : [0, 0, 1];
+  },
+};
+
+function mat4Perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1,
+          0, 0, 2 * far * near * nf, 0];
+}
+function mat4LookAt(eye, center, up) {
+  const z = V.norm(V.sub(eye, center));
+  const x = V.norm(V.cross(up, z));
+  const y = V.cross(z, x);
+  return [
+    x[0], y[0], z[0], 0,
+    x[1], y[1], z[1], 0,
+    x[2], y[2], z[2], 0,
+    -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]),
+    -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]),
+    -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]), 1,
+  ];
+}
+function mat4Mul(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] +
+                     a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    }
+  }
+  return o;
+}
+
+function hslToRgb(h, s, l) {
+  const f = (n) => {
+    const k = (n + h * 12) % 12;
+    return l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+  };
+  return [f(0), f(8), f(4)];
+}
+
+/* ---- mesh building ----------------------------------------------------------------- */
+class MeshBuilder {
+  constructor() { this.v = []; this.i = []; this.n = 0; }
+
+  push(p, nrm, col) {
+    this.v.push(p[0], p[1], p[2], nrm[0], nrm[1], nrm[2], col[0], col[1], col[2]);
+    return this.n++;
+  }
+  tri(a, b, c) { this.i.push(a, b, c); }
+
+  /* A swept tube: the workhorse for bodies, limbs and tails. `spine` is a polyline and
+     `radii` gives the radius at each point. Frames are built from the local tangent, which
+     is adequate because none of our spines twist. */
+  tube(spine, radii, seg, col, capStart, capEnd) {
+    const rings = [];
+    for (let i = 0; i < spine.length; i++) {
+      const prev = spine[Math.max(0, i - 1)], next = spine[Math.min(spine.length - 1, i + 1)];
+      const t = V.norm(V.sub(next, prev));
+      let ref = Math.abs(t[1]) > 0.9 ? [0, 0, 1] : [0, 1, 0];
+      const n1 = V.norm(V.cross(t, ref));
+      const n2 = V.norm(V.cross(t, n1));
+      const ring = [];
+      for (let s = 0; s < seg; s++) {
+        const a = (s / seg) * Math.PI * 2;
+        const dir = V.add(V.scale(n1, Math.cos(a)), V.scale(n2, Math.sin(a)));
+        ring.push(this.push(V.add(spine[i], V.scale(dir, radii[i])), dir, col));
+      }
+      rings.push({ ring, tangent: t });
+    }
+    for (let i = 0; i < rings.length - 1; i++) {
+      const a = rings[i].ring, b = rings[i + 1].ring;
+      for (let s = 0; s < seg; s++) {
+        const s2 = (s + 1) % seg;
+        this.tri(a[s], b[s], b[s2]);
+        this.tri(a[s], b[s2], a[s2]);
+      }
+    }
+    if (capStart) this.cap(spine[0], rings[0], V.scale(rings[0].tangent, -1), col, true);
+    if (capEnd) {
+      const last = rings[rings.length - 1];
+      this.cap(spine[spine.length - 1], last, last.tangent, col, false);
+    }
+  }
+
+  cap(center, ringInfo, normal, col, flip) {
+    const c = this.push(center, normal, col);
+    const r = ringInfo.ring;
+    for (let s = 0; s < r.length; s++) {
+      const s2 = (s + 1) % r.length;
+      if (flip) this.tri(c, r[s2], r[s]); else this.tri(c, r[s], r[s2]);
+    }
+  }
+
+  sphere(center, radius, seg, col, squashY = 1) {
+    const rows = Math.max(4, Math.round(seg / 2));
+    const grid = [];
+    for (let i = 0; i <= rows; i++) {
+      const phi = (i / rows) * Math.PI, row = [];
+      for (let s = 0; s <= seg; s++) {
+        const th = (s / seg) * Math.PI * 2;
+        const d = [Math.sin(phi) * Math.cos(th), Math.cos(phi), Math.sin(phi) * Math.sin(th)];
+        const p = [center[0] + d[0] * radius,
+                   center[1] + d[1] * radius * squashY,
+                   center[2] + d[2] * radius];
+        row.push(this.push(p, V.norm([d[0], d[1] / squashY, d[2]]), col));
+      }
+      grid.push(row);
+    }
+    for (let i = 0; i < rows; i++) {
+      for (let s = 0; s < seg; s++) {
+        this.tri(grid[i][s], grid[i + 1][s], grid[i + 1][s + 1]);
+        this.tri(grid[i][s], grid[i + 1][s + 1], grid[i][s + 1]);
+      }
+    }
+  }
+
+  /* A flat sheet, used for the dorsal fin. Rendered two-sided by the shader, so it needs
+     no thickness. */
+  sheet(base, tips, col) {
+    const b = base.map((p) => this.push(p, [0, 0, 1], col));
+    const t = tips.map((p) => this.push(p, [0, 0, 1], col));
+    for (let i = 0; i < b.length - 1; i++) {
+      this.tri(b[i], t[i], t[i + 1]);
+      this.tri(b[i], t[i + 1], b[i + 1]);
+    }
+  }
+}
+
+/* The genotype -> geometry map. This function is the actual object of the experiment: it is
+   the thing that would move into the simulation (and gain energy costs) at a later
+   milestone. */
+function buildCreature(g) {
+  const mb = new MeshBuilder();
+  const bodyCol = hslToRgb(g.hue, 0.42, 0.52);
+  const limbCol = hslToRgb(g.hue, 0.40, 0.40);
+  const headCol = hslToRgb(g.hue, 0.36, 0.62);
+  const eyeCol = [0.05, 0.05, 0.07];
+  const finCol = hslToRgb((g.hue + 0.06) % 1, 0.45, 0.46);
+
+  const L = g.body_length, R = g.body_radius;
+  const STEPS = 48, SEG = 16;
+
+  // Spine runs -L/2 .. +L/2 along x; +x is the head end. `arch` bows it vertically.
+  const spineAt = (t) => [(t - 0.5) * L, Math.sin(t * Math.PI) * g.arch * R * 1.6, 0];
+
+  // Radius profile. (4t(1-t))^fullness is 0 at both ends and 1 mid-body; a low exponent
+  // gives a near-cylindrical worm, a high one a spindle. `taper` biases bulk fore or aft,
+  // and `segment_count` ripples the surface into visible somites.
+  const radiusAt = (t) => {
+    let r = R * Math.pow(Math.max(1e-4, 4 * t * (1 - t)), g.fullness);
+    r *= 1 + g.taper * (t - 0.5) * 1.2;
+    if (g.segment_count > 1) {
+      const ripple = Math.cos(t * g.segment_count * Math.PI * 2);
+      r *= 1 - g.segment_depth * 0.28 * (1 - ripple) / 2;
+    }
+    return Math.max(0.004, r);
+  };
+
+  const spine = [], radii = [];
+  for (let i = 0; i <= STEPS; i++) {
+    const t = i / STEPS;
+    spine.push(spineAt(t));
+    radii.push(radiusAt(t));
+  }
+  mb.tube(spine, radii, SEG, bodyCol, true, true);
+
+  // Tail: continues aft, tapering to a point.
+  if (g.tail_length > 0.03) {
+    const ts = [], tr = [], N = 14;
+    const start = spineAt(0);
+    for (let i = 0; i <= N; i++) {
+      const u = i / N;
+      ts.push([start[0] - u * g.tail_length, start[1] - u * u * g.arch * R * 0.8, 0]);
+      tr.push(Math.max(0.006, radiusAt(0.06) * (1 - u) * 1.1 + 0.008));
+    }
+    mb.tube(ts, tr, Math.max(6, SEG / 2), bodyCol, false, true);
+  }
+
+  // Head and eyes. head_size 0 means no head at all -- the founder has none.
+  const headPos = spineAt(1);
+  const headR = g.head_size * R * 1.5;
+  if (g.head_size > 0.04) {
+    mb.sphere([headPos[0] + headR * 0.5, headPos[1], 0], headR, 14, headCol, 0.9);
+    if (g.eye_size > 0.015) {
+      const eyeR = g.eye_size * R * 1.4;
+      const k = Math.max(2, Math.round(g.radial_symmetry) === 1 ? 2 : Math.round(g.radial_symmetry));
+      for (let j = 0; j < k; j++) {
+        const a = k === 2 ? (j === 0 ? Math.PI / 2 : -Math.PI / 2) : (j / k) * Math.PI * 2;
+        mb.sphere(
+          [headPos[0] + headR * 0.95, headPos[1] + Math.sin(a) * headR * 0.45,
+           Math.cos(a) * headR * 0.62],
+          eyeR, 8, eyeCol
+        );
+      }
+    }
+  }
+
+  // Dorsal fin: a sheet standing off the back.
+  if (g.dorsal_fin > 0.05) {
+    const base = [], tips = [], N = 18;
+    for (let i = 0; i <= N; i++) {
+      const t = 0.18 + (i / N) * 0.62;
+      const p = spineAt(t), r = radiusAt(t);
+      base.push([p[0], p[1] + r * 0.92, 0]);
+      tips.push([p[0], p[1] + r * 0.92 + g.dorsal_fin * R * 2.4 * Math.sin((i / N) * Math.PI), 0]);
+    }
+    mb.sheet(base, tips, finCol);
+  }
+
+  // Limbs. Bilateral (radial_symmetry 1) puts a pair either side; higher symmetry arrays
+  // them around the body axis, which is what turns the animal into something radial.
+  const pairs = Math.round(g.limb_pairs);
+  const sym = Math.round(g.radial_symmetry);
+  if (pairs > 0 && g.limb_length > 0.05) {
+    const dirs = [];
+    if (sym <= 1) {
+      const splay = g.limb_splay * Math.PI * 0.5;
+      dirs.push([0, -Math.sin(splay), Math.cos(splay)], [0, -Math.sin(splay), -Math.cos(splay)]);
+    } else {
+      for (let j = 0; j < sym; j++) {
+        const a = (j / sym) * Math.PI * 2;
+        dirs.push([0, Math.sin(a), Math.cos(a)]);
+      }
+    }
+    for (let p = 0; p < pairs; p++) {
+      const t = pairs === 1 ? 0.5 : 0.26 + (p / (pairs - 1)) * 0.5;
+      const attach = spineAt(t), r = radiusAt(t);
+      for (const d0 of dirs) {
+        const joints = Math.max(1, Math.round(g.limb_segments));
+        const segLen = g.limb_length / joints;
+        let pos = V.add(attach, V.scale(d0, r * 0.75));
+        const ls = [pos], lr = [g.limb_thickness];
+        let dir = d0;
+        for (let j = 1; j <= joints; j++) {
+          // Each joint bends a little further toward -y, giving a jointed leg rather than
+          // a straight spike.
+          dir = V.norm(V.add(dir, [0, -g.limb_droop * 0.85, 0]));
+          pos = V.add(pos, V.scale(dir, segLen));
+          ls.push(pos);
+          lr.push(g.limb_thickness * (1 - 0.6 * (j / joints)));
+        }
+        mb.tube(ls, lr, 8, limbCol, true, true);
+      }
+    }
+  }
+
+  return {
+    vertices: new Float32Array(mb.v),
+    indices: new Uint32Array(mb.i),
+    count: mb.i.length,
+  };
+}
+
+function meshBounds(mesh) {
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  const v = mesh.vertices;
+  for (let i = 0; i < v.length; i += 9) {
+    for (let k = 0; k < 3; k++) {
+      lo[k] = Math.min(lo[k], v[i + k]);
+      hi[k] = Math.max(hi[k], v[i + k]);
+    }
+  }
+  return { lo, hi };
+}
+
+/* ---- WebGL renderer ---------------------------------------------------------------- */
+const VERT = `#version 300 es
+in vec3 aPos; in vec3 aNormal; in vec3 aColor;
+uniform mat4 uVP;
+out vec3 vN; out vec3 vColor; out vec3 vPos;
+void main() { vN = aNormal; vColor = aColor; vPos = aPos; gl_Position = uVP * vec4(aPos, 1.0); }`;
+
+const FRAG = `#version 300 es
+precision highp float;
+in vec3 vN; in vec3 vColor; in vec3 vPos;
+uniform vec3 uLight; uniform vec3 uEye;
+out vec4 outColor;
+void main() {
+  // Two-sided lighting, because the fin is a zero-thickness sheet and tube winding is not
+  // guaranteed consistent. Cheaper than getting every winding right in the builder.
+  vec3 N = normalize(vN);
+  if (!gl_FrontFacing) N = -N;
+  vec3 L = normalize(uLight);
+  vec3 E = normalize(uEye - vPos);
+  vec3 H = normalize(L + E);
+  float diff = max(dot(N, L), 0.0);
+  float amb = 0.22 + 0.18 * max(dot(N, vec3(0.0, 1.0, 0.0)), 0.0);
+  float spec = pow(max(dot(N, H), 0.0), 28.0) * 0.22;
+  float rim = pow(1.0 - max(dot(N, E), 0.0), 3.0) * 0.22;
+  vec3 c = vColor * (amb + diff * 0.9) + vec3(spec) + vec3(0.30, 0.45, 0.65) * rim;
+  outColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}`;
+
+const canvas = document.getElementById("gl");
+const gl = canvas.getContext("webgl2", { antialias: true });
+if (!gl) {
+  document.body.innerHTML =
+    '<p style="padding:24px;color:#e6edf3">This spike needs WebGL2, which this browser did ' +
+    "not provide.</p>";
+  throw new Error("WebGL2 unavailable");
+}
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    throw new Error("shader compile failed: " + gl.getShaderInfoLog(s));
+  }
+  return s;
+}
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, VERT));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(program);
+if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+  throw new Error("program link failed: " + gl.getProgramInfoLog(program));
+}
+gl.useProgram(program);
+const uVP = gl.getUniformLocation(program, "uVP");
+const uLight = gl.getUniformLocation(program, "uLight");
+const uEye = gl.getUniformLocation(program, "uEye");
+
+gl.enable(gl.DEPTH_TEST);
+gl.enable(gl.SCISSOR_TEST);
+// Culling stays off: see the two-sided lighting note in the fragment shader.
+
+class GpuMesh {
+  constructor() {
+    this.vao = gl.createVertexArray();
+    this.vbo = gl.createBuffer();
+    this.ibo = gl.createBuffer();
+    this.count = 0;
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
+    const stride = 9 * 4;
+    for (const [name, offset] of [["aPos", 0], ["aNormal", 12], ["aColor", 24]]) {
+      const loc = gl.getAttribLocation(program, name);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, stride, offset);
+    }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo);
+    gl.bindVertexArray(null);
+  }
+  upload(mesh) {
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.vertices, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    this.count = mesh.count;
+  }
+  draw() {
+    gl.bindVertexArray(this.vao);
+    gl.drawElements(gl.TRIANGLES, this.count, gl.UNSIGNED_INT, 0);
+  }
+}
+
+/* ---- application state ------------------------------------------------------------- */
+const N_OFFSPRING = 6;
+const state = {
+  parent: founderGenes(),
+  offspring: [],
+  generation: 0,
+  seed: 20260729,
+  strength: 1,
+  spin: true,
+  theta: 0.7,
+  phi: 1.15,
+  fit: 2.5,
+  center: [0, 0, 0],
+};
+const gpuParent = new GpuMesh();
+const gpuOffspring = Array.from({ length: N_OFFSPRING }, () => new GpuMesh());
+
+function respawnOffspring() {
+  state.offspring = [];
+  for (let i = 0; i < N_OFFSPRING; i++) {
+    const rng = makeRng(state.seed + i * 7919 + state.generation * 104729);
+    state.offspring.push(mutate(state.parent, rng, state.strength));
+  }
+  state.seed = (state.seed + 1013904223) >>> 0;
+  rebuild();
+}
+
+function rebuild() {
+  const meshes = [buildCreature(state.parent), ...state.offspring.map(buildCreature)];
+  gpuParent.upload(meshes[0]);
+  meshes.slice(1).forEach((m, i) => gpuOffspring[i].upload(m));
+
+  // One shared camera framing for all seven, so relative body size stays comparable
+  // between parent and offspring rather than being normalised away.
+  let radius = 0.6, cy = 0;
+  for (const m of meshes) {
+    const { lo, hi } = meshBounds(m);
+    radius = Math.max(radius, Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) * 0.62);
+    cy = Math.max(cy, (hi[1] + lo[1]) / 2);
+  }
+  state.fit = radius * 2.1;
+  state.center = [0, cy * 0.5, 0];
+  renderGeneUi();
+  document.getElementById("dump").textContent = JSON.stringify(
+    Object.fromEntries(GENES.map((s) => [s.key, +state.parent[s.key].toFixed(3)])), null, 1
+  );
+  document.getElementById("lineage").textContent = `generation ${state.generation}`;
+}
+
+/* ---- drawing ----------------------------------------------------------------------- */
+const THUMB_FRACTION = 0.3;
+
+function drawPanel(mesh, x, y, w, h, bg) {
+  if (w < 2 || h < 2) return;
+  gl.viewport(x, y, w, h);
+  gl.scissor(x, y, w, h);
+  gl.clearColor(bg[0], bg[1], bg[2], 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const d = state.fit;
+  const eye = [
+    state.center[0] + d * Math.sin(state.phi) * Math.cos(state.theta),
+    state.center[1] + d * Math.cos(state.phi),
+    state.center[2] + d * Math.sin(state.phi) * Math.sin(state.theta),
+  ];
+  const view = mat4LookAt(eye, state.center, [0, 1, 0]);
+  const proj = mat4Perspective(0.85, w / h, Math.max(0.05, d * 0.05), d * 8);
+  gl.uniformMatrix4fv(uVP, false, mat4Mul(proj, view));
+  gl.uniform3f(uLight, 0.55, 0.8, 0.45);
+  gl.uniform3fv(uEye, eye);
+  mesh.draw();
+}
+
+function frame(now) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+  const W = Math.max(1, Math.round(cssW * dpr)), H = Math.max(1, Math.round(cssH * dpr));
+  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+
+  if (state.spin && !drag.active) state.theta = (now / 6000) % (Math.PI * 2);
+
+  const thumbH = Math.round(H * THUMB_FRACTION);
+  drawPanel(gpuParent, 0, thumbH, W, H - thumbH, [0.051, 0.063, 0.075]);
+  const tw = W / N_OFFSPRING;
+  for (let i = 0; i < N_OFFSPRING; i++) {
+    const x = Math.round(i * tw);
+    const w = Math.round((i + 1) * tw) - x;
+    drawPanel(gpuOffspring[i], x, 0, w, thumbH,
+              i % 2 ? [0.070, 0.086, 0.102] : [0.060, 0.075, 0.090]);
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ---- interaction ------------------------------------------------------------------- */
+const drag = { active: false, x: 0, y: 0, moved: 0 };
+
+canvas.addEventListener("pointerdown", (e) => {
+  drag.active = true; drag.x = e.clientX; drag.y = e.clientY; drag.moved = 0;
+  canvas.classList.add("dragging");
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!drag.active) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag.moved += Math.abs(dx) + Math.abs(dy);
+  state.theta -= dx * 0.01;
+  state.phi = clamp(state.phi - dy * 0.01, 0.15, Math.PI - 0.15);
+  drag.x = e.clientX; drag.y = e.clientY;
+});
+canvas.addEventListener("pointerup", (e) => {
+  drag.active = false;
+  canvas.classList.remove("dragging");
+  if (drag.moved > 6) return;  // it was an orbit, not a click
+
+  // Clicking an offspring promotes it: selection, applied by hand.
+  const rect = canvas.getBoundingClientRect();
+  const yFromTop = e.clientY - rect.top;
+  if (yFromTop < rect.height * (1 - THUMB_FRACTION)) return;
+  const idx = Math.floor(((e.clientX - rect.left) / rect.width) * N_OFFSPRING);
+  if (idx < 0 || idx >= N_OFFSPRING) return;
+  state.parent = state.offspring[idx];
+  state.generation += 1;
+  respawnOffspring();
+});
+
+/* ---- side panel -------------------------------------------------------------------- */
+function renderGeneUi() {
+  const host = document.getElementById("genes");
+  if (host.childElementCount === 0) {
+    for (const spec of GENES) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML =
+        `<label for="g-${spec.key}">${spec.label}</label><output id="o-${spec.key}"></output>` +
+        `<input type="range" id="g-${spec.key}" min="${spec.min}" max="${spec.max}" ` +
+        `step="${spec.int ? 1 : (spec.max - spec.min) / 200}">`;
+      host.appendChild(row);
+      row.querySelector("input").addEventListener("input", (e) => {
+        state.parent[spec.key] = parseFloat(e.target.value);
+        rebuild();
+      });
+    }
+  }
+  for (const spec of GENES) {
+    const v = state.parent[spec.key];
+    document.getElementById(`g-${spec.key}`).value = v;
+    document.getElementById(`o-${spec.key}`).textContent =
+      spec.int ? String(Math.round(v)) : v.toFixed(2);
+  }
+}
+
+const rateInput = document.getElementById("rate");
+const rateOut = document.getElementById("rate-out");
+function syncRate() {
+  state.strength = parseFloat(rateInput.value);
+  rateOut.textContent = state.strength.toFixed(2) + "x";
+}
+rateInput.addEventListener("input", () => { syncRate(); respawnOffspring(); });
+syncRate();
+
+document.getElementById("respawn").addEventListener("click", respawnOffspring);
+document.getElementById("reset").addEventListener("click", () => {
+  state.parent = founderGenes();
+  state.generation = 0;
+  respawnOffspring();
+});
+document.getElementById("spin").addEventListener("change", (e) => {
+  state.spin = e.target.checked;
+});
+
+respawnOffspring();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

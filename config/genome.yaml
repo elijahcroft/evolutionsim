@@ -1,0 +1,212 @@
+# The genome definition. This file *is* the list of things that can evolve.
+#
+# Each locus is continuous and diploid: an organism carries two alleles, and the expressed
+# trait is their mean, clipped to [low, high]. `init` is the founder value for both alleles.
+# `sigma` is the standard deviation of a small-effect mutation at that locus, in trait units.
+#
+# Choosing sigma: it should be small relative to (high - low) -- roughly 1/100th to 1/50th --
+# so that adaptation is gradual and visible rather than jumping to an optimum in one step.
+# Loci whose scale is large (temp_optimum spans 110 degrees) therefore get a large sigma.
+
+mutation:
+  # Probability that a large-effect mutation replaces a small one. Large jumps are what let a
+  # lineage escape a local optimum -- notably, cross the gap into a new diet.
+  p_large_effect: 0.02
+  large_effect_scale: 6.0     # multiplies sigma for a large-effect mutation.
+  # Planetary radiation multiplies each organism's mutation_rate by
+  # (1 + radiation_sensitivity * planet.radiation).
+  radiation_sensitivity: 4.0
+
+# Genetic distance (used for mate compatibility and the speciation test) is computed in
+# standardised trait space: each locus is divided by (high - low) and optionally weighted.
+# Weight 0 excludes a locus from the species concept without excluding it from evolution.
+distance_weights:
+  default: 1.0
+  overrides:
+    mutation_rate: 0.0     # a mutator is not a different species.
+    move_persistence: 0.5
+
+loci:
+  # ---- body ---------------------------------------------------------------------------
+  - name: body_size
+    low: 0.05
+    high: 12.0
+    init: 0.40
+    sigma: 0.05
+    doc: "Characteristic length. Mass scales as size^3; almost every cost depends on it."
+  - name: body_slenderness
+    low: 0.5
+    high: 2.5
+    init: 1.0
+    sigma: 0.03
+    doc: "Divides body-support cost (a slender build needs less structure) but reduces storage."
+  - name: energy_storage
+    low: 0.5
+    high: 25.0
+    init: 2.0
+    sigma: 0.15
+    doc: "Energy capacity per unit mass. Buffers famine and seasons; costs mass to carry."
+  - name: armor
+    low: 0.0
+    high: 5.0
+    init: 0.0
+    sigma: 0.04
+    doc: "Reduces capture probability; adds support cost and upkeep."
+
+  # ---- metabolism ---------------------------------------------------------------------
+  - name: metabolic_rate
+    low: 0.15
+    high: 3.5
+    init: 1.0
+    sigma: 0.05
+    doc: "Scales basal cost and the ceiling on intake and activity. Capped by aerobic scope."
+  - name: temp_optimum
+    low: -30.0
+    high: 80.0
+    init: 15.0
+    sigma: 0.90
+    doc: "Body temperature at which thermoregulation is free."
+  - name: temp_tolerance
+    low: 0.0
+    high: 45.0
+    init: 8.0
+    sigma: 0.40
+    doc: "Half-width of the free thermal window. Generalism; costs basal metabolism."
+  - name: radiation_tolerance
+    low: 0.0
+    high: 5.0
+    init: 0.5
+    sigma: 0.04
+    doc: "Reduces radiation mortality and mutation load; costs basal metabolism (repair)."
+  - name: pressure_tolerance
+    low: 0.0
+    high: 5.0
+    init: 0.5
+    sigma: 0.04
+    doc: "Reduces pressure-mismatch hazard; costs structure."
+
+  # ---- diet (pre-softmax logits; normalised to sum to 1 at expression) ----------------
+  # Because these are softmaxed, gaining carnivory necessarily costs autotrophy. Diet
+  # specialisation is structural, not a bonus.
+  - name: aff_autotroph
+    low: -5.0
+    high: 5.0
+    init: 2.0
+    sigma: 0.08
+    doc: "Affinity for producing energy from light + nutrients."
+  - name: aff_detritus
+    low: -5.0
+    high: 5.0
+    init: 0.0
+    sigma: 0.08
+    doc: "Affinity for consuming the dead-biomass pool."
+  - name: aff_herbivore
+    low: -5.0
+    high: 5.0
+    init: -1.0
+    sigma: 0.08
+    doc: "Affinity for extracting energy from autotroph-dominant organisms."
+  - name: aff_carnivore
+    low: -5.0
+    high: 5.0
+    init: -1.0
+    sigma: 0.08
+    doc: "Affinity for extracting energy from heterotroph-dominant organisms."
+  - name: digestion_efficiency
+    low: 0.05
+    high: 0.95
+    init: 0.40
+    sigma: 0.02
+    doc: "Fraction of ingested energy assimilated. Costs basal metabolism (gut tissue)."
+
+  # ---- movement and sensing ------------------------------------------------------------
+  - name: move_speed
+    low: 0.0
+    high: 6.0
+    init: 0.20
+    sigma: 0.05
+    doc: "Cells per tick. Locomotion cost scales with speed^2, so this is expensive."
+  - name: move_persistence
+    low: 0.0
+    high: 1.0
+    init: 0.5
+    sigma: 0.03
+    doc: "Tendency to continue in the previous direction rather than re-choosing. Free."
+  - name: sense_range
+    low: 0.0
+    high: 8.0
+    init: 0.30
+    sigma: 0.05
+    doc: "Radius (in cells) of habitat and prey detection. Costs neural tissue upkeep."
+
+  # ---- life history ---------------------------------------------------------------------
+  - name: maturity_age
+    low: 1.0
+    high: 3000.0
+    init: 20.0
+    sigma: 1.20
+    doc: "Ticks before reproduction is possible; also the timescale of senescence."
+  - name: senescence_rate
+    low: 0.0
+    high: 1.0
+    init: 0.05
+    sigma: 0.01
+    doc: "Scales age-dependent mortality. Low values cost basal metabolism (maintenance)."
+  - name: repro_threshold
+    low: 0.15
+    high: 1.0
+    init: 0.70
+    sigma: 0.02
+    doc: "Fraction of storage capacity that must be full before reproducing."
+  - name: offspring_count
+    low: 1.0
+    high: 50.0
+    init: 2.0
+    sigma: 0.35
+    doc: "Offspring per reproduction event. Rounded stochastically at expression."
+  - name: parental_investment
+    low: 0.02
+    high: 1.0
+    init: 0.20
+    sigma: 0.02
+    doc: "Energy per offspring as a fraction of its adult storage. The r/K dial."
+  - name: sex_bias
+    low: 0.0
+    high: 1.0
+    init: 0.0
+    sigma: 0.02
+    doc: "Probability of attempting sexual rather than asexual reproduction."
+
+  # ---- defence and behaviour ------------------------------------------------------------
+  - name: camouflage
+    low: 0.0
+    high: 5.0
+    init: 0.0
+    sigma: 0.04
+    doc: "Reduces detection by predators, countered by their sense_range."
+  - name: aggression
+    low: 0.0
+    high: 5.0
+    init: 0.10
+    sigma: 0.04
+    doc: "Raises encounter rate as an attacker and capture probability; raises being-noticed."
+  - name: fear
+    low: 0.0
+    high: 5.0
+    init: 0.50
+    sigma: 0.04
+    doc: "Weight on predator density when choosing where to move. Costs foraging quality."
+  - name: sociality
+    low: -1.0
+    high: 1.0
+    init: 0.0
+    sigma: 0.03
+    doc: "Positive => aggregate with conspecifics; negative => avoid them (territoriality)."
+
+  # ---- meta -----------------------------------------------------------------------------
+  - name: mutation_rate
+    low: 0.0001
+    high: 0.5
+    init: 0.02
+    sigma: 0.002
+    doc: "Per-allele probability of mutation in offspring. Itself evolvable."

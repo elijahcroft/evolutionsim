@@ -1,0 +1,71 @@
+# An Earth-like reference planet. Every value here is meant to be varied: the point of the
+# project is that changing these produces different biospheres, not different cosmetics.
+#
+# Values marked "enters the energy equations" are read directly by src/evosim/life/energy.py.
+# They are not modifiers or bonuses; they are terms in a cost or intake formula.
+
+name: Terra
+
+# ---- grid ------------------------------------------------------------------------------
+# Equirectangular, wrapping east-west, not wrapping north-south (poles are edges).
+grid_width: 128
+grid_height: 64
+
+# ---- global physical scalars -----------------------------------------------------------
+gravity: 1.0            # in g. Enters body-support and locomotion cost.
+o2_fraction: 0.21       # by volume. Caps aerobic scope => caps size x metabolic_rate product.
+o2_reference: 0.21      # the fraction at which aerobic scope is 1.0; do not vary casually.
+pressure: 1.0           # atm. Enters pressure-tolerance mismatch hazard and drag.
+solar_constant: 1.0     # relative to Earth. Scales insolation, hence autotrophic intake.
+radiation: 0.0          # relative surface ionising flux. Raises mutation rate AND mortality.
+
+# ---- orbit and rotation ----------------------------------------------------------------
+axial_tilt: 23.4        # degrees. 0 => no seasons. High tilt => violent continental seasons.
+day_length_hours: 24.0  # modulates daylight fraction, hence daily insolation total.
+year_length_days: 365   # ticks per orbit. Short years => fast seasonal cycling.
+
+# ---- terrain generation ----------------------------------------------------------------
+terrain:
+  sea_level: 0.0        # elevation threshold; cells below this are water.
+  octaves: 6            # layered value-noise detail levels.
+  base_frequency: 2.5   # features per world width at octave 0. Low => few large continents.
+  persistence: 0.55     # amplitude falloff per octave.
+  lacunarity: 2.0       # frequency gain per octave.
+  # Elevation is renormalised so this fraction of cells ends up above sea level. Makes
+  # "ocean coverage" a direct dial instead of an emergent surprise of the noise function.
+  land_fraction: 0.29
+  max_elevation_km: 6.0 # scales normalised elevation to km, for the temperature lapse rate.
+
+# ---- climate ---------------------------------------------------------------------------
+climate:
+  base_temperature_c: -18.0   # temperature at zero insolation (radiative floor).
+  insolation_amplitude_c: 48.0  # degrees added at full insolation.
+  lapse_rate_c_per_km: 6.5      # elevation cooling.
+  # Thermal inertia: fraction of the way a cell moves toward its instantaneous equilibrium
+  # each tick. Water is far more sluggish than land, which is what creates maritime vs
+  # continental climates -- and therefore extreme-seasonality niches -- for free.
+  inertia_land: 0.25
+  inertia_water: 0.02
+  # Moisture: oceans are saturated; land moisture falls off with distance from water and rises
+  # with temperature-driven evaporation. Crude, but enough to make continental interiors dry.
+  moisture_ocean: 1.0
+  moisture_decay_per_cell: 0.12
+  moisture_min: 0.02
+
+# ---- resources -------------------------------------------------------------------------
+resources:
+  nutrient_capacity_land: 1.0
+  nutrient_capacity_water: 0.6
+  nutrient_regen_land: 0.02      # per tick, logistic toward capacity, scaled by moisture.
+  nutrient_regen_water: 0.05     # oceans regenerate faster but hold less.
+  upwelling_bonus: 0.5           # extra regen near steep bathymetry.
+  # Detritus is the corpse/waste pool. It decays into nutrients at a temperature-dependent
+  # rate, standing in for decomposers until real ones evolve to compete with it.
+  detritus_decay_rate: 0.01
+  detritus_decay_q10: 2.0        # decay rate doubles per +10 C.
+  detritus_reference_temp_c: 15.0
+
+# ---- toxicity --------------------------------------------------------------------------
+# A static hostile-chemistry field. Uniform by default; raise it to make the planet hostile.
+base_toxicity: 0.0
+toxicity_elevation_coupling: 0.0   # >0 concentrates toxicity in highlands (volcanic proxy).
