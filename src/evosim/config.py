@@ -472,7 +472,79 @@ class GenomeConfig:
                     f"genome.loci[{i}] ({name}): sigma ({spec.sigma}) exceeds a quarter of the "
                     f"locus span ({spec.span}); mutation would swamp inheritance"
                 )
+            values = np.asarray(
+                [spec.low, spec.high, spec.init, spec.sigma],
+                dtype=np.float64,
+            )
+            with np.errstate(over="ignore", under="ignore"):
+                stored = values.astype(np.float32)
+                stored_span = np.float32(spec.span)
+            if (
+                np.any(~np.isfinite(stored))
+                or not np.isfinite(stored_span)
+                or np.any((values != 0.0) & (stored == 0.0))
+            ):
+                raise ConfigError(
+                    f"genome.loci[{i}] ({name}): bounds, init, sigma, and span must be "
+                    "representable as finite float32 values"
+                )
+            if stored[1] <= stored[0] or stored_span <= 0.0:
+                raise ConfigError(
+                    f"genome.loci[{i}] ({name}): low and high collapse to the same "
+                    "float32 value"
+                )
+            stored_bound_span = float(stored[1]) - float(stored[0])
+            if not np.isclose(
+                stored_bound_span,
+                float(stored_span),
+                rtol=4.0 * float(np.finfo(np.float32).eps),
+                atol=float(np.finfo(np.float32).smallest_subnormal),
+            ):
+                raise ConfigError(
+                    f"genome.loci[{i}] ({name}): low/high interval is not resolvable "
+                    "consistently in float32"
+                )
             loci.append(spec)
+
+        loci_by_name = {spec.name: spec for spec in loci}
+        for name in ("body_size", "energy_storage", "radiation_tolerance"):
+            spec = loci_by_name.get(name)
+            if spec is not None and spec.low < 0.0:
+                raise ConfigError(f"genome.loci.{name}.low must be >= 0")
+        slenderness = loci_by_name.get("body_slenderness")
+        if slenderness is not None and slenderness.low <= 0.0:
+            raise ConfigError("genome.loci.body_slenderness.low must be > 0")
+        mutation_rate = loci_by_name.get("mutation_rate")
+        if mutation_rate is not None and (
+            mutation_rate.low < 0.0 or mutation_rate.high > 1.0
+        ):
+            raise ConfigError(
+                "genome.loci.mutation_rate bounds must lie within [0, 1] because it is "
+                "a probability"
+            )
+        body_size = loci_by_name.get("body_size")
+        energy_storage = loci_by_name.get("energy_storage")
+        if body_size is not None:
+            body_high = np.float32(body_size.high)
+            with np.errstate(over="ignore", invalid="ignore"):
+                maximum_mass = np.float32(body_high * body_high * body_high)
+            if not np.isfinite(maximum_mass):
+                raise ConfigError(
+                    "genome.loci.body_size.high produces body mass outside finite "
+                    "float32 range"
+                )
+            if energy_storage is not None and slenderness is not None:
+                with np.errstate(over="ignore", invalid="ignore"):
+                    maximum_storage = np.float32(
+                        maximum_mass
+                        * np.float32(energy_storage.high)
+                        / np.float32(slenderness.low)
+                    )
+                if not np.isfinite(maximum_storage):
+                    raise ConfigError(
+                        "body_size, energy_storage, and body_slenderness bounds produce "
+                        "storage capacity outside finite float32 range"
+                    )
 
         unknown = set(weight_overrides) - seen
         if unknown:
@@ -489,13 +561,28 @@ class GenomeConfig:
                     f"genome.distance_weights.overrides.{spec.name}: expected a number, "
                     f"got {_typename(raw)}"
                 )
-            if raw < 0:
+            value = float(raw)
+            if not np.isfinite(value):
                 raise ConfigError(
-                    f"genome.distance_weights.overrides.{spec.name}: must be >= 0, got {raw}"
+                    f"genome.distance_weights.overrides.{spec.name}: must be finite, "
+                    f"got {value}"
                 )
-            weights.append(float(raw))
+            if value < 0:
+                raise ConfigError(
+                    f"genome.distance_weights.overrides.{spec.name}: must be >= 0, got {value}"
+                )
+            weights.append(value)
 
-        if sum(weights) <= 0:
+        with np.errstate(over="ignore", under="ignore"):
+            float32_weights = np.asarray(weights, dtype=np.float32)
+        if np.any(~np.isfinite(float32_weights)) or np.any(
+            (np.asarray(weights) > 0.0) & (float32_weights == 0.0)
+        ):
+            raise ConfigError(
+                "genome.distance_weights: every positive weight must be representable "
+                "as a finite, non-zero float32 value"
+            )
+        if float32_weights.sum(dtype=np.float64) <= 0:
             raise ConfigError(
                 "genome.distance_weights: total weight is zero, so genetic distance would "
                 "always be zero and speciation could never occur"

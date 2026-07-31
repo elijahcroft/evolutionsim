@@ -5,6 +5,87 @@ and what the next task is.
 
 ---
 
+## Milestone 2 — life substrate
+
+**Status: complete.** 171 tests passing.
+
+### Completed
+
+- **`src/evosim/life/genome.py` — diploid genome operations.** `GenomeSchema` converts the
+  configured 28 loci into immutable float32 arrays once. Genome batches have shape
+  `(organisms, loci, 2)`; founders are homozygous at each configured `init`, and expression is
+  the clipped allele mean. Weighted RMS genetic distance, Mendelian recombination, and bounded
+  small/large-effect mutation are vectorised and consume only their explicit named RNG streams.
+
+- **`phenotype.py` — the body-model seam.** Expressed traits are cached in a preallocated
+  `PhenotypeBuffer`. The four diet logits use a numerically stable softmax. All current body
+  geometry lives here: `mass = body_size^3` and, because slender builds trade storage for lower
+  support cost, `storage_capacity = mass * energy_storage / body_slenderness`. Nothing in
+  population storage derives body quantities itself, so later morphology remains a contained
+  replacement. `offspring_count` stays continuous in the cache; stochastic rounding happens
+  once per future reproduction event rather than changing whenever a phenotype is read.
+
+- **`population.py` — preallocated struct-of-arrays storage.** Every array is allocated to
+  `sim.max_population`, with living organisms kept in one dense prefix. Batch addition and
+  stable death compaction operate through NumPy indexing, preserve alignment across genomes,
+  phenotypes, positions, energy, ancestry, IDs, and future species fields, and contain no
+  per-organism Python loops. Persistent IDs are never recycled. Capacity overflow raises
+  explicitly so the reproduction layer can later record `capacity_throttle` rather than drop
+  births silently.
+
+- **Deterministic founder seeding.** Exactly `sim.initial_population` identical-genome founders
+  are placed with replacement in the configured `water`, `land`, or `any` habitat using only
+  the `init` RNG stream. Eligible cells are weighted by physical cell area, avoiding the same
+  equirectangular polar bias that M1 removed from resources. A planet with no requested habitat
+  fails with a clear error. Founder energy follows the documented newborn ledger:
+  `parental_investment * storage_capacity`.
+
+- **Headless diagnostics and renderer boundary.** The CLI now reports living population and
+  reserved array memory. `--out` retains `world.npz`/`world.json` and adds
+  `population.npz`/`population.json`; both are explicitly diagnostic dumps, not resume
+  snapshots. One-organism serialization is a dictionary containing alleles, named traits,
+  diet, and a nested body record so future morphology fields can be added without a format
+  rewrite.
+
+- **Performance baseline.** `tools/profile_tick.py` times the work M2 can honestly measure:
+  refreshing every phenotype plus reducing positions to per-cell occupancy. On the current
+  development machine, the default 40,000-organism / 8,192-cell substrate reserves 15.60 MiB
+  and ran at 25.5 ms per pass (about 1.57 million organism updates/second, 10-pass sample).
+  This is not called a biological tick; M3 adds the ecological work that will dominate it.
+
+- **Acceptance coverage.** 79 new tests pin schema immutability, homozygous founders,
+  clipped expression, distance scaling, deterministic recombination and mutation, stable
+  softmax, body geometry, habitat validity, named-stream isolation, full-state founder
+  determinism, founder energy, capacity overflow, stable aligned compaction, persistent IDs,
+  dictionary serialization, hot-path loop absence, diagnostic output, and profiler behavior.
+  The cross-process RNG test now also preserves the host environment, fixing its pre-existing
+  Windows-only import failure.
+
+### Consequences and known limitations
+
+- Organisms are intentionally static in M2. `evosim --ticks N` advances climate and world
+  resources for `N` days, but it does not age, feed, move, kill, or reproduce the founder
+  population. Presenting that substrate pass as a simulation tick would give a misleading
+  performance number and imply ecology that does not exist yet.
+- Founder placement is uniform by physical area within the requested surface habitat. It does
+  not yet evaluate temperature, resources, crowding, or trait-specific suitability.
+- The scalar body equations above are a documented interim model, not the later 3D morphology
+  system. Their containment in `phenotype.py` is the compatibility guarantee.
+- Mutation and recombination primitives exist and are tested, but no reproduction scheduler
+  invokes them yet. Likewise, species and ancestry arrays are storage for later layers, not a
+  claim that taxonomy already exists.
+- Population and world output files remain diagnostics. A resumable snapshot must also capture
+  every RNG stream plus future history and scheduler state.
+
+### Next task — Milestone 3: ecological tick
+
+Connect the population to the world: vectorised energy costs and autotrophic/detrital intake,
+resource draw and return, movement over grid neighbours, environmental mortality, ageing, and
+the first real biological tick. Keep every cost routed through the energy-model seam and prove
+the energy/resource ledger before adding reproduction and selection.
+
+---
+
 ## Milestone 1 — the world
 
 **Status: complete.** 92 tests passing.
@@ -172,8 +253,8 @@ rewrite:
   or calls `np.random.<global>`. These are lint rather than convention because the failure mode
   — a subtly unreproducible run — is invisible until you try to reproduce it.
 
-- One test asserts the founder genome is **autotroph-dominant** (softmaxed diet logits give
-  ~71% autotrophy, <10% each for herbivory/carnivory). If the founder started predatory,
+- One test asserts the founder genome is **autotroph-dominant** (the configured diet logits
+  softmax to ~81% autotrophy and ~4% each herbivory/carnivory). If the founder started predatory,
   "predation emerged" would be a fiction, so the starting point is pinned by a test.
 
 ### Two defects the tests caught during this milestone

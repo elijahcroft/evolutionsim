@@ -14,7 +14,7 @@ mutation:
   p_large_effect: 0.02
   large_effect_scale: 6.0     # multiplies sigma for a large-effect mutation.
   # Planetary radiation multiplies each organism's mutation_rate by
-  # (1 + radiation_sensitivity * planet.radiation).
+  # (1 + radiation_sensitivity * planet.radiation / (1 + radiation_tolerance)).
   radiation_sensitivity: 4.0
 
 # Genetic distance (used for mate compatibility and the speciation test) is computed in
@@ -163,7 +163,7 @@ loci:
     high: 50.0
     init: 2.0
     sigma: 0.35
-    doc: "Offspring per reproduction event. Rounded stochastically at expression."
+    doc: "Offspring per reproduction event. Rounded stochastically once at reproduction."
   - name: parental_investment
     low: 0.02
     high: 1.0

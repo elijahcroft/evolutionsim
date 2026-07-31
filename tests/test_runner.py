@@ -6,6 +6,9 @@ sweeps, and the directional-selection tests all drive the simulation through it.
 
 from __future__ import annotations
 
+import json
+
+import numpy as np
 import pytest
 
 from evosim.runner import build_parser, main, resolve_config
@@ -16,6 +19,7 @@ def test_default_invocation_succeeds(capsys):
     out = capsys.readouterr().out
     assert "config fingerprint" in out
     assert "loci" in out
+    assert "living organisms   : 800 / 40000" in out
 
 
 def test_seed_flag_overrides_config_seed():
@@ -54,7 +58,37 @@ def test_negative_ticks_fail(capsys):
     assert "must be non-negative" in capsys.readouterr().err
 
 
+def test_missing_requested_founder_habitat_fails_cleanly(capsys):
+    assert main(
+        [
+            "--set",
+            "planet.terrain.land_fraction=0",
+            "--set",
+            "sim.initial_habitat=land",
+        ]
+    ) == 2
+    assert "initialization error" in capsys.readouterr().err
+
+
 def test_out_writes_world_state(tmp_path):
     assert main(["--ticks", "3", "--out", str(tmp_path)]) == 0
     assert (tmp_path / "world.npz").is_file()
     assert (tmp_path / "world.json").is_file()
+    assert (tmp_path / "population.npz").is_file()
+    assert (tmp_path / "population.json").is_file()
+
+    with np.load(tmp_path / "population.npz") as state:
+        assert state["genome"].shape == (800, 28, 2)
+        assert state["cell"].shape == (800,)
+        assert state["diet"].shape == (800, 4)
+    metadata = json.loads((tmp_path / "population.json").read_text(encoding="utf-8"))
+    assert metadata["kind"] == "diagnostic_population_dump"
+    assert metadata["day"] == 3
+    assert metadata["size"] == 800
+    assert len(metadata["locus_names"]) == len(metadata["trait_names"]) == 28
+    assert metadata["diet_names"] == [
+        "autotroph",
+        "detritus",
+        "herbivore",
+        "carnivore",
+    ]

@@ -14,9 +14,10 @@ history.
 
 ## Status
 
-**Milestone 1 of 8 — the world.** Deterministic terrain, seasonal climate, moisture, nutrients,
-detritus, and toxicity now evolve on the planetary grid. There is not yet any life. See
-[DEVLOG.md](DEVLOG.md) for what exists, what its limitations are, and what is next.
+**Milestone 2 of 8 — the life substrate.** The world now contains a deterministic founder
+population with diploid genomes, expressed phenotypes, and preallocated vectorised population
+storage. Organisms are still ecologically inert: energy flow, movement, mortality, and
+reproduction begin in Milestone 3. See [DEVLOG.md](DEVLOG.md) for the exact boundary.
 
 ## Setup
 
@@ -34,8 +35,9 @@ python3 -m venv .venv
 .venv/bin/evosim --set planet.gravity=1.4         # override any config value
 .venv/bin/evosim --set genome.loci.body_size.sigma=0.1
 .venv/bin/evosim --planet heavy.yaml              # an alternative world file
-.venv/bin/evosim --ticks 365 --out runs/year_one  # evolve and save world fields
+.venv/bin/evosim --ticks 365 --out runs/year_one  # advance world; save world + population fields
 .venv/bin/python tools/render_world.py --day 90 --out world-day-90.png
+.venv/bin/python tools/profile_tick.py             # profile the 40k-organism M2 array substrate
 ```
 
 ## How it is organised

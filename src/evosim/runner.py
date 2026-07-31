@@ -11,6 +11,7 @@ import numpy as np
 
 from evosim import __version__
 from evosim.config import DEFAULT_CONFIG_DIR, Config, ConfigError
+from evosim.life import DIET_NAMES, HabitatError, Population
 from evosim.rng import STREAM_NAMES, RngBundle
 from evosim.world import World
 
@@ -91,6 +92,11 @@ def main(argv: list[str] | None = None) -> int:
 
     rng = RngBundle(config.sim.seed)
     world = World.create(config.planet, rng)
+    try:
+        population = Population.seed_founders(config, world, rng)
+    except HabitatError as exc:
+        print(f"initialization error: {exc}", file=sys.stderr)
+        return 2
     world.step(args.ticks)
 
     planet = config.planet
@@ -111,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  genome             : {config.genome.n_loci} loci")
     print(f"  founders           : {config.sim.initial_population} in "
           f"{config.sim.initial_habitat}")
+    print(f"  living organisms   : {population.size} / {population.capacity}")
+    print(f"  population storage : {population.memory_bytes / (1024 ** 2):.1f} MiB")
     print(f"  simulated day      : {world.day}")
     print(f"  actual land        : {world.terrain.land.mean():.1%}")
     print(
@@ -120,12 +128,22 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.out:
-        _write_world(args.out, config, world)
+        _write_run(args.out, config, world, population)
         print(f"  output             : {args.out.resolve()}")
     return 0
 
 
-def _write_world(output_dir: Path, config: Config, world: World) -> None:
+def _write_run(
+    output_dir: Path,
+    config: Config,
+    world: World,
+    population: Population,
+) -> None:
+    """Write diagnostic world and population arrays.
+
+    These files intentionally are not called snapshots: full resume support must also persist
+    every RNG stream and future evolution/history state.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output_dir / "world.npz", day=world.day, **world.arrays())
     metadata = {
@@ -138,6 +156,28 @@ def _write_world(output_dir: Path, config: Config, world: World) -> None:
     }
     with (output_dir / "world.json").open("w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+    np.savez_compressed(
+        output_dir / "population.npz",
+        **population.active_arrays(),
+    )
+    population_metadata = {
+        "format": 1,
+        "kind": "diagnostic_population_dump",
+        "config_fingerprint": config.fingerprint(),
+        "seed": config.sim.seed,
+        "day": world.day,
+        "size": population.size,
+        "capacity": population.capacity,
+        "n_loci": population.schema.n_loci,
+        "locus_names": list(population.schema.names),
+        "trait_names": list(population.phenotypes.trait_names),
+        "diet_names": list(DIET_NAMES),
+        "genome_shape": [population.size, population.schema.n_loci, 2],
+    }
+    with (output_dir / "population.json").open("w", encoding="utf-8") as handle:
+        json.dump(population_metadata, handle, indent=2, sort_keys=True)
         handle.write("\n")
 
 

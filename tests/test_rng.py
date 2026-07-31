@@ -7,6 +7,7 @@ reproducible, no amount of care elsewhere makes a run repeatable.
 from __future__ import annotations
 
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -70,12 +71,14 @@ def test_stream_keys_are_stable_across_processes():
     )
     outputs = set()
     for hash_seed in ("0", "1", "random"):
+        env = os.environ.copy()
+        env["PYTHONHASHSEED"] = hash_seed
         result = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
             text=True,
             check=True,
-            env={"PYTHONHASHSEED": hash_seed, "PATH": "/usr/bin:/bin"},
+            env=env,
         )
         outputs.add(result.stdout.strip())
     assert len(outputs) == 1, f"stream derivation is not process-stable: {outputs}"
