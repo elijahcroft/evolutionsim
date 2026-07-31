@@ -1,8 +1,14 @@
-"""Profile the Milestone 2 vectorised life substrate.
+"""Profile the biological tick.
 
-This diagnostic refreshes every active phenotype and reduces organism locations
-to per-cell occupancy counts.  It is intentionally not a biological simulation
-tick: ecology, energy flow, movement, and mortality begin in Milestone 3.
+From Milestone 3 this measures the real thing: ageing, sensing and movement over
+grid neighbours, every cost and intake term, resource draw and return, and
+mortality with corpse deposition.
+
+The population shrinks as the benchmark runs, because a tick kills and Milestone
+3 has no reproduction to replace the dead.  Throughput is therefore reported
+against the organisms actually stepped rather than against the starting count,
+and the starting and ending populations are both shown so a suspiciously fast
+number is visible as a small one.
 """
 
 from __future__ import annotations
@@ -16,17 +22,15 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
 
 from evosim.config import DEFAULT_CONFIG_DIR, Config, ConfigError
-from evosim.life.population import HabitatError, Population
-from evosim.rng import RngBundle
-from evosim.world import World
+from evosim.life.population import HabitatError
+from evosim.sim import Simulation
 
 DEFAULT_ITERATIONS = 10
-BENCHMARK_NAME = "m2_life_substrate_pass"
+BENCHMARK_NAME = "m3_biological_tick"
 BENCHMARK_DESCRIPTION = (
-    "refresh all phenotypes and reduce organism locations to per-cell occupancy"
+    "age, sense and move, pay all costs, feed and draw resources, then apply mortality"
 )
 
 
@@ -34,8 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog=(
-            "This is not yet a biological tick. Milestone 2 measures the array "
-            "substrate only; ecology begins in Milestone 3."
+            "Milestone 3 has no reproduction, so the population falls as the "
+            "benchmark runs; throughput counts the organisms actually stepped."
         ),
     )
     parser.add_argument(
@@ -56,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_ITERATIONS,
         metavar="COUNT",
-        help=f"timed substrate passes (default: {DEFAULT_ITERATIONS})",
+        help=f"timed biological ticks (default: {DEFAULT_ITERATIONS})",
     )
     parser.add_argument(
         "--seed",
@@ -72,20 +76,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def life_substrate_pass(population: Population) -> NDArray[np.int64]:
-    """Refresh active phenotypes and return vectorised per-cell occupancy."""
-    size = population.size
-    population.phenotypes.update(
-        0,
-        population.genomes[:size],
-        population.schema,
-    )
-    return np.bincount(
-        population.cell[:size],
-        minlength=population.n_cells,
-    )
-
-
 def run_benchmark(
     config: Config,
     *,
@@ -94,7 +84,7 @@ def run_benchmark(
     seed: int,
     config_dir: Path,
 ) -> dict[str, Any]:
-    """Set up and time the M2 life-substrate pass."""
+    """Set up and time the biological tick."""
     benchmark_config = replace(
         config,
         sim=replace(
@@ -105,33 +95,35 @@ def run_benchmark(
     )
 
     setup_started = perf_counter()
-    rng = RngBundle(seed)
-    world = World.create(benchmark_config.planet, rng)
-    population = Population.seed_founders(benchmark_config, world, rng)
+    simulation = Simulation.create(benchmark_config)
+    # One untimed tick removes one-off cache and allocation effects from the measurement.
+    simulation.step()
     setup_seconds = perf_counter() - setup_started
 
-    # One untimed pass removes one-off cache/allocation effects from the small benchmark.
-    occupancy = life_substrate_pass(population)
-
+    population = simulation.population
+    stepped = 0
     timed_started = perf_counter()
     for _ in range(iterations):
-        occupancy = life_substrate_pass(population)
+        stepped += population.size
+        simulation.step()
     elapsed_seconds = perf_counter() - timed_started
 
     # perf_counter is monotonic, but guard the division for synthetic clocks in tests.
     measured_seconds = max(elapsed_seconds, np.finfo(np.float64).eps)
-    milliseconds_per_pass = measured_seconds * 1_000.0 / iterations
-    organisms_per_second = population_count * iterations / measured_seconds
+    occupancy = np.bincount(
+        population.cell[population.active], minlength=population.n_cells
+    )
 
     return {
         "benchmark": BENCHMARK_NAME,
         "description": BENCHMARK_DESCRIPTION,
-        "biological_tick": False,
-        "ecology_starts": "M3",
+        "biological_tick": True,
         "config_dir": str(config_dir.resolve()),
         "config_fingerprint": benchmark_config.fingerprint(),
         "seed": seed,
         "population": population_count,
+        "final_population": population.size,
+        "organisms_stepped": stepped,
         "capacity": population.capacity,
         "iterations": iterations,
         "world_cells": population.n_cells,
@@ -139,8 +131,8 @@ def run_benchmark(
         "memory_bytes": population.memory_bytes,
         "memory_mib": population.memory_bytes / (1024.0**2),
         "total_ms": measured_seconds * 1_000.0,
-        "ms_per_pass": milliseconds_per_pass,
-        "organisms_per_second": organisms_per_second,
+        "ms_per_pass": measured_seconds * 1_000.0 / iterations,
+        "organisms_per_second": stepped / measured_seconds,
         "occupancy_total": int(occupancy.sum()),
         "occupied_cells": int(np.count_nonzero(occupancy)),
     }
@@ -197,17 +189,18 @@ def _argument_error(message: str) -> int:
 
 
 def _print_human_report(result: dict[str, Any]) -> None:
-    print("Milestone 2 life substrate performance diagnostic")
+    print("Biological tick performance diagnostic")
     print(
-        "  scope              : phenotype refresh + vectorised per-cell "
-        "occupancy reduction"
+        "  scope              : age, move, cost, intake and resource draw, "
+        "mortality and corpse return"
     )
-    print("  biological tick    : no (ecology begins in Milestone 3)")
+    print("  biological tick    : yes")
     print(f"  config fingerprint : {result['config_fingerprint']}")
     print(f"  seed               : {result['seed']}")
     print(
-        f"  population         : {result['population']:,} / "
-        f"{result['capacity']:,}"
+        f"  population         : {result['population']:,} -> "
+        f"{result['final_population']:,} of {result['capacity']:,} "
+        "(M3 has no reproduction)"
     )
     print(f"  world cells        : {result['world_cells']:,}")
     print(f"  iterations         : {result['iterations']:,}")
@@ -216,8 +209,11 @@ def _print_human_report(result: dict[str, Any]) -> None:
         f"  reserved memory    : {result['memory_mib']:.2f} MiB "
         f"({result['memory_bytes']:,} bytes)"
     )
-    print(f"  life substrate pass: {result['ms_per_pass']:.3f} ms/pass")
-    print(f"  throughput         : {result['organisms_per_second']:,.0f} organisms/s")
+    print(f"  biological tick    : {result['ms_per_pass']:.3f} ms/tick")
+    print(
+        f"  throughput         : {result['organisms_per_second']:,.0f} organisms/s "
+        f"({result['organisms_stepped']:,} stepped)"
+    )
     print(
         f"  occupied cells     : {result['occupied_cells']:,} "
         f"({result['occupancy_total']:,} organisms counted)"

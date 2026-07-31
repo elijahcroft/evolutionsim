@@ -53,6 +53,16 @@ def test_ticks_advance_the_world(capsys):
     assert "simulated day      : 100" in capsys.readouterr().out
 
 
+def test_ticks_are_biological_and_report_their_ledger(capsys):
+    """From milestone 3 a tick feeds, moves, and kills, so the CLI must say what it did."""
+    assert main(["--ticks", "5"]) == 0
+    out = capsys.readouterr().out
+    assert "last tick intake" in out
+    assert "last tick cost" in out
+    assert "last tick deaths" in out
+    assert "cells moved" in out
+
+
 def test_negative_ticks_fail(capsys):
     assert main(["--ticks", "-1"]) == 2
     assert "must be non-negative" in capsys.readouterr().err
@@ -77,15 +87,22 @@ def test_out_writes_world_state(tmp_path):
     assert (tmp_path / "population.npz").is_file()
     assert (tmp_path / "population.json").is_file()
 
-    with np.load(tmp_path / "population.npz") as state:
-        assert state["genome"].shape == (800, 28, 2)
-        assert state["cell"].shape == (800,)
-        assert state["diet"].shape == (800, 4)
     metadata = json.loads((tmp_path / "population.json").read_text(encoding="utf-8"))
     assert metadata["kind"] == "diagnostic_population_dump"
     assert metadata["day"] == 3
-    assert metadata["size"] == 800
     assert len(metadata["locus_names"]) == len(metadata["trait_names"]) == 28
+
+    # The dump is whoever survived three ticks of ecology, so its size is an outcome rather
+    # than the founder count. What must hold is that every array still describes the same
+    # organisms in the same order.
+    size = metadata["size"]
+    assert 0 < size <= 800
+    with np.load(tmp_path / "population.npz") as state:
+        assert state["genome"].shape == (size, 28, 2)
+        assert state["cell"].shape == (size,)
+        assert state["diet"].shape == (size, 4)
+        assert state["age"].shape == (size,)
+        assert np.all(state["age"] == 3)
     assert metadata["diet_names"] == [
         "autotroph",
         "detritus",

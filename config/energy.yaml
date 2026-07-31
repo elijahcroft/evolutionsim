@@ -57,6 +57,10 @@ costs:
   thermo_mass_exponent: 0.6667
 
   # armor_upkeep = k_armor * armor * m^0.67
+  # The 0.67 here is thermo_mass_exponent above, deliberately shared: both are areas over a
+  # body's surface (heat loss, and the plating that covers it), so they should move together.
+  # If a future model needs them to differ, armor gets its own exponent key -- it must not be
+  # a literal in the code.
   k_armor: 0.0015
 
 # ---- intake, per tick -------------------------------------------------------------------
@@ -64,9 +68,16 @@ intake:
   # autotrophy = k_photo * diet_autotroph * m^0.67 * light * sat(nutrients) * sat(moisture)
   #              * digestion_efficiency
   # Surface-area scaling: light and nutrients are collected across a surface, while basal cost
-  # scales as m^0.75. Autotrophs therefore have a natural size ceiling -- the reason the seed
-  # lineage stays small until it finds a richer energy source.
-  k_photo: 0.030
+  # scales as m^0.75. Autotrophs therefore have a natural size ceiling -- though at the value
+  # below the binding constraint on size is body support (linear in mass), which bites first.
+  #
+  # Calibrated in M3, the first milestone able to measure it. The M0 guess of 0.030 was an
+  # order of magnitude too low: the four factors that erode it (light ~0.83, nutrient
+  # saturation ~0.67, moisture saturation ~0.87, digestion 0.40) multiply out to ~0.19, so no
+  # founder cell on the reference planet returned its own upkeep and the lineage always died.
+  # At 0.30 about 90% of seeded ocean cells are net-positive for the founder genome and the
+  # polar 10% are not, which is the intended shape: a habitable planet with unlivable edges.
+  k_photo: 0.300
   photo_mass_exponent: 0.6667
   nutrient_half_saturation: 0.25     # Michaelis-Menten half-saturation constant.
   moisture_half_saturation: 0.15

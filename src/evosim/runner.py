@@ -12,7 +12,8 @@ import numpy as np
 from evosim import __version__
 from evosim.config import DEFAULT_CONFIG_DIR, Config, ConfigError
 from evosim.life import DIET_NAMES, HabitatError, Population
-from evosim.rng import STREAM_NAMES, RngBundle
+from evosim.rng import STREAM_NAMES
+from evosim.sim import Simulation, TickStats
 from evosim.world import World
 
 
@@ -90,14 +91,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2
 
-    rng = RngBundle(config.sim.seed)
-    world = World.create(config.planet, rng)
     try:
-        population = Population.seed_founders(config, world, rng)
+        simulation = Simulation.create(config)
     except HabitatError as exc:
         print(f"initialization error: {exc}", file=sys.stderr)
         return 2
-    world.step(args.ticks)
+    stats = simulation.run(args.ticks)
+    rng, world, population = simulation.rng, simulation.world, simulation.population
 
     planet = config.planet
     print(f"evosim {__version__}")
@@ -126,11 +126,33 @@ def main(argv: list[str] | None = None) -> int:
         f"{world.climate.temperature_c.min():.1f} to "
         f"{world.climate.temperature_c.max():.1f} C"
     )
+    if stats is not None:
+        _print_tick_stats(stats)
 
     if args.out:
         _write_run(args.out, config, world, population)
         print(f"  output             : {args.out.resolve()}")
     return 0
+
+
+def _print_tick_stats(stats: TickStats) -> None:
+    """Report the final tick's ledger.
+
+    Intake and cost are shown beside each other because their difference is the single number
+    that says whether the planet can currently support the lineage at all.
+    """
+    print(f"  last tick deaths   : {stats.deaths} "
+          f"({stats.deaths_starvation} starved, {stats.deaths_hazard} hazard)")
+    print(f"  last tick intake   : {stats.energy_intake:.4g} "
+          f"({stats.intake_autotrophy:.4g} autotrophy, "
+          f"{stats.intake_detritivory:.4g} detritivory)")
+    print(f"  last tick cost     : {stats.energy_cost:.4g} "
+          f"(basal {stats.cost_basal:.4g}, support {stats.cost_support:.4g}, "
+          f"thermo {stats.cost_thermoregulation:.4g})")
+    print(f"  last tick net      : {stats.net_energy:+.4g}")
+    print(f"  cells moved        : {stats.cells_moved}")
+    print(f"  mean energy        : {stats.mean_energy:.4g} "
+          f"({stats.mean_energy_fullness:.1%} of storage)")
 
 
 def _write_run(

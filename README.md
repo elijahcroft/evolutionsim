@@ -14,10 +14,14 @@ history.
 
 ## Status
 
-**Milestone 2 of 8 — the life substrate.** The world now contains a deterministic founder
-population with diploid genomes, expressed phenotypes, and preallocated vectorised population
-storage. Organisms are still ecologically inert: energy flow, movement, mortality, and
-reproduction begin in Milestone 3. See [DEVLOG.md](DEVLOG.md) for the exact boundary.
+**Milestone 3 of 8 — the ecological tick.** Organisms now live: they age, sense and move over
+grid neighbours, pay for every gram of body they carry, feed from finite cell resources, and die
+of hazards, senescence, or an empty ledger. Energy is not conserved — autotrophy creates it from
+light — but matter is, and the tests prove it.
+
+They do not yet reproduce, so the founder cohort dies of old age around day 45. That is the
+correct boundary, not a bug: reproduction, selection, and predation are Milestone 4. See
+[DEVLOG.md](DEVLOG.md) for exactly what is and is not implemented.
 
 ## Setup
 
@@ -35,9 +39,9 @@ python3 -m venv .venv
 .venv/bin/evosim --set planet.gravity=1.4         # override any config value
 .venv/bin/evosim --set genome.loci.body_size.sigma=0.1
 .venv/bin/evosim --planet heavy.yaml              # an alternative world file
-.venv/bin/evosim --ticks 365 --out runs/year_one  # advance world; save world + population fields
+.venv/bin/evosim --ticks 365 --out runs/year_one  # run the simulation; save world + population
 .venv/bin/python tools/render_world.py --day 90 --out world-day-90.png
-.venv/bin/python tools/profile_tick.py             # profile the 40k-organism M2 array substrate
+.venv/bin/python tools/profile_tick.py             # time the biological tick at 40k organisms
 ```
 
 ## How it is organised

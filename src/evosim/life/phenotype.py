@@ -366,6 +366,31 @@ class PhenotypeBuffer:
             _indices=self._indices,
         )
 
+    def select(self, rows: NDArray[np.integer[Any]]) -> PhenotypeBatch:
+        """Return a batch gathered from arbitrary active rows.
+
+        Unlike :meth:`batch`, the arrays are copies rather than views, because fancy indexing
+        cannot alias.  This exists for read-only consumers that work on a scattered subset --
+        the movement layer scoring only the organisms that are actually moving this tick --
+        so they need not evaluate the whole population to reach a handful of rows.
+        """
+
+        selection = np.asarray(rows)
+        if selection.ndim != 1 or not np.issubdtype(selection.dtype, np.integer):
+            raise TypeError("rows must be a one-dimensional integer array")
+        if selection.size and (
+            selection.min() < 0 or selection.max() >= self.size
+        ):
+            raise IndexError(f"row index is outside active range [0, {self.size})")
+        return PhenotypeBatch(
+            traits=self.traits[selection],
+            diet=self.diet[selection],
+            mass=self.mass[selection],
+            storage_capacity=self.storage_capacity[selection],
+            trait_names=self.trait_names,
+            _indices=self._indices,
+        )
+
     def trait(
         self,
         name: str,

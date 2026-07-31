@@ -1,0 +1,300 @@
+"""Tests for the biological tick.
+
+The heart of this file is the ledger.  Energy is deliberately not conserved -- autotrophy
+creates it from light -- but matter is, and the whole ecology rests on that: if organisms could
+draw nutrients that were never removed from a cell, "carrying capacity" would be fiction and
+every result about competition afterwards would be meaningless.  The ledger tests run with
+regrowth and decay switched off, so the only thing that can move a pool is an organism.
+"""
+
+from __future__ import annotations
+
+import ast
+import inspect
+from textwrap import dedent
+
+import numpy as np
+import pytest
+
+from evosim.config import Config
+from evosim.sim import Simulation
+
+# Regrowth and decay off: the pools then change only where an organism ate or died.
+FROZEN_RESOURCES = [
+    "planet.resources.nutrient_regen_land=0.0",
+    "planet.resources.nutrient_regen_water=0.0",
+    "planet.resources.detritus_decay_rate=0.0",
+]
+
+
+@pytest.fixture(scope="module")
+def config() -> Config:
+    return Config.load()
+
+
+def small(overrides: list[str] | None = None, **_: object) -> Config:
+    """A cheap configuration: a small world and a small founder population."""
+    return Config.load(
+        overrides=[
+            "planet.grid_width=32",
+            "planet.grid_height=16",
+            "sim.initial_population=200",
+            "sim.max_population=2000",
+            *(overrides or []),
+        ]
+    )
+
+
+# -- construction ------------------------------------------------------------------------------
+
+
+def test_create_seeds_the_configured_founder_population(config: Config):
+    simulation = Simulation.create(config)
+    assert simulation.population.size == config.sim.initial_population
+    assert simulation.day == 0
+    assert simulation.last_stats is None
+
+
+def test_run_zero_ticks_changes_nothing(config: Config):
+    simulation = Simulation.create(config)
+    before = simulation.population.energy[simulation.population.active].copy()
+    assert simulation.run(0) is None
+    assert simulation.day == 0
+    assert np.array_equal(simulation.population.energy[simulation.population.active], before)
+
+
+@pytest.mark.parametrize("ticks", [-1, 1.5, True])
+def test_run_rejects_a_bad_tick_count(config: Config, ticks):
+    with pytest.raises((TypeError, ValueError)):
+        Simulation.create(config).run(ticks)
+
+
+# -- the tick happens ---------------------------------------------------------------------------
+
+
+def test_a_tick_ages_every_survivor():
+    simulation = Simulation.create(small())
+    simulation.step()
+    assert np.all(simulation.population.age[simulation.population.active] == 1)
+
+
+def test_a_tick_advances_the_world_exactly_one_day():
+    simulation = Simulation.create(small())
+    simulation.run(5)
+    assert simulation.day == 5
+    assert simulation.last_stats is not None
+    assert simulation.last_stats.day == 5
+
+
+def test_organisms_feed_and_pay_on_the_reference_planet():
+    """The founder lineage must be able to earn on the planet it was seeded into."""
+    simulation = Simulation.create(small())
+    stats = simulation.step()
+    assert stats.intake_autotrophy > 0.0
+    assert stats.cost_basal > 0.0
+    assert stats.cost_support > 0.0
+    assert stats.net_energy > 0.0
+
+
+def test_reserves_build_up_while_the_ledger_is_positive():
+    simulation = Simulation.create(small())
+    first = simulation.step()
+    later = simulation.run(20)
+    assert later is not None
+    assert later.mean_energy_fullness > first.mean_energy_fullness
+
+
+def test_energy_never_exceeds_storage_capacity():
+    simulation = Simulation.create(small())
+    simulation.run(40)
+    active = simulation.population.active
+    assert np.all(
+        simulation.population.energy[active]
+        <= simulation.population.phenotypes.storage_capacity[active] + 1e-6
+    )
+
+
+# -- the matter ledger ----------------------------------------------------------------------------
+
+
+def test_nutrients_fall_by_exactly_what_was_drawn():
+    simulation = Simulation.create(small(FROZEN_RESOURCES))
+    before = simulation.world.resources.nutrients.sum()
+    stats = simulation.step()
+    after = simulation.world.resources.nutrients.sum()
+    assert stats.nutrients_drawn > 0.0
+    assert before - after == pytest.approx(stats.nutrients_drawn, rel=1e-9)
+
+
+def test_detritus_falls_by_what_was_eaten_and_rises_by_what_died():
+    simulation = Simulation.create(
+        small([*FROZEN_RESOURCES, "genome.loci.aff_detritus.init=2.0"])
+    )
+    for _ in range(6):
+        before = simulation.world.resources.detritus.sum()
+        stats = simulation.step()
+        after = simulation.world.resources.detritus.sum()
+        assert after - before == pytest.approx(
+            stats.detritus_deposited - stats.detritus_consumed, abs=1e-9
+        )
+    assert stats.detritus_consumed > 0.0
+    assert stats.detritus_deposited > 0.0
+
+
+def test_a_corpse_returns_its_body_and_its_unspent_energy():
+    """Nothing an organism accumulated may leave the world when it dies."""
+    simulation = Simulation.create(
+        small([*FROZEN_RESOURCES, "energy.mortality.background=1.0"])
+    )
+    population = simulation.population
+    active = population.active
+    expected = (
+        simulation.config.energy.energy_density
+        * population.phenotypes.mass[active].astype(np.float64).sum()
+    )
+    before = simulation.world.resources.detritus.sum()
+    stats = simulation.step()
+
+    assert stats.population == 0
+    assert stats.deaths == 200
+    # The corpses carry unspent energy too, so the deposit is at least the body mass.
+    assert simulation.world.resources.detritus.sum() - before == pytest.approx(
+        stats.detritus_deposited
+    )
+    assert stats.detritus_deposited > expected
+
+
+def test_resource_pools_stay_within_their_physical_bounds():
+    simulation = Simulation.create(small())
+    for _ in range(30):
+        simulation.step()
+        resources = simulation.world.resources
+        assert np.all(resources.nutrients >= 0.0)
+        assert np.all(resources.nutrients <= resources.nutrient_capacity + 1e-9)
+        assert np.all(resources.detritus >= 0.0)
+
+
+def test_a_crowded_cell_cannot_be_drawn_past_empty():
+    """Contention is what makes a cell's carrying capacity real rather than nominal."""
+    simulation = Simulation.create(
+        small([*FROZEN_RESOURCES, "sim.initial_population=1500"])
+    )
+    population = simulation.population
+    population.cell[population.active] = 5  # everyone into one cell
+    stats = simulation.step()
+    assert stats.nutrients_drawn > 0.0
+    assert np.all(simulation.world.resources.nutrients >= 0.0)
+
+
+# -- mortality ------------------------------------------------------------------------------------
+
+
+def test_starvation_is_recorded_separately_from_hazards():
+    """A lineage that cannot pay its bills must die of that, and be seen to."""
+    simulation = Simulation.create(
+        small(["energy.intake.k_photo=0.0", "energy.intake.k_detritus=0.0"])
+    )
+    starved = 0
+    for _ in range(30):
+        stats = simulation.step()
+        starved += stats.deaths_starvation
+        if stats.population == 0:
+            break
+    assert starved > 0
+    assert simulation.population.size == 0
+
+
+def test_a_lethal_planet_kills_through_the_hazard_path():
+    simulation = Simulation.create(small(["planet.base_toxicity=1000.0"]))
+    stats = simulation.step()
+    assert stats.deaths_hazard > 0
+
+
+def test_extinction_is_stable():
+    simulation = Simulation.create(small(["energy.mortality.background=1.0"]))
+    simulation.step()
+    assert simulation.population.size == 0
+    stats = simulation.run(5)
+    assert stats is not None
+    assert stats.population == 0
+    assert stats.energy_intake == 0.0
+    assert simulation.day == 6
+
+
+def test_senescence_ends_a_generation_that_cannot_reproduce():
+    """M3 has no reproduction, so a healthy population must still die of old age."""
+    simulation = Simulation.create(small())
+    simulation.run(200)
+    assert simulation.population.size == 0
+
+
+# -- determinism ------------------------------------------------------------------------------------
+
+
+def test_two_runs_of_the_same_config_and_seed_are_identical():
+    left = Simulation.create(small())
+    right = Simulation.create(small())
+    left.run(25)
+    right.run(25)
+
+    assert left.population.size == right.population.size
+    for name, array in left.population.active_arrays().items():
+        assert np.array_equal(array, right.population.active_arrays()[name]), name
+    assert np.array_equal(
+        left.world.resources.nutrients, right.world.resources.nutrients
+    )
+    assert left.rng.get_state() == right.rng.get_state()
+
+
+def test_a_different_seed_produces_a_different_run():
+    left = Simulation.create(small())
+    right = Simulation.create(small(["sim.seed=99"]))
+    left.run(15)
+    right.run(15)
+    assert not np.array_equal(
+        left.population.organism_id[left.population.active],
+        right.population.organism_id[right.population.active],
+    )
+
+
+def test_the_tick_reads_no_state_outside_the_simulation():
+    """Stepping one simulation must not perturb an independent one built the same way."""
+    reference = Simulation.create(small())
+    reference.run(10)
+
+    disturbed = Simulation.create(small())
+    noise = Simulation.create(small(["sim.seed=7"]))
+    for _ in range(10):
+        noise.step()
+        disturbed.step()
+    assert np.array_equal(
+        reference.population.organism_id[reference.population.active],
+        disturbed.population.organism_id[disturbed.population.active],
+    )
+
+
+# -- hot path ------------------------------------------------------------------------------------
+
+
+def test_the_tick_has_no_per_organism_python_iteration():
+    """The same coarse lint the population storage is held to, applied to the tick itself.
+
+    ``Simulation.run`` and ``MovementModel.move`` legitimately loop -- over ticks and over step
+    index respectively -- and are excluded; nothing here may loop over organisms.
+    """
+    from evosim.life.energy import EnergyModel
+    from evosim.life.mortality import MortalityModel
+
+    for method in (
+        Simulation.step,
+        Simulation._feed,
+        Simulation._reap,
+        Simulation._summarise,
+        EnergyModel.costs_for,
+        EnergyModel.intake_for,
+        EnergyModel.foraging_yield,
+        MortalityModel.hazards,
+    ):
+        tree = ast.parse(dedent(inspect.getsource(method)))
+        forbidden = (ast.For, ast.While, ast.ListComp, ast.SetComp, ast.DictComp)
+        assert not any(isinstance(node, forbidden) for node in ast.walk(tree)), method

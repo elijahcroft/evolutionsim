@@ -1,4 +1,4 @@
-"""Tests for the Milestone 2 life-substrate performance diagnostic."""
+"""Tests for the biological-tick performance diagnostic."""
 
 from __future__ import annotations
 
@@ -23,15 +23,18 @@ def test_profile_tick_json_smoke(capsys):
     ) == 0
 
     result = json.loads(capsys.readouterr().out)
-    assert result["benchmark"] == "m2_life_substrate_pass"
-    assert result["biological_tick"] is False
-    assert result["ecology_starts"] == "M3"
-    assert result["population"] == result["occupancy_total"] == 8
+    assert result["benchmark"] == "m3_biological_tick"
+    assert result["biological_tick"] is True
+    assert result["population"] == 8
     assert result["iterations"] == 1
     assert result["seed"] == 7
     assert result["memory_bytes"] > 0
     assert result["ms_per_pass"] >= 0.0
     assert result["organisms_per_second"] > 0.0
+    # The tick kills, so the survivors are what is left and the occupancy must still count
+    # exactly them -- a mismatch would mean a compaction lost track of somebody.
+    assert result["final_population"] <= result["population"]
+    assert result["occupancy_total"] == result["final_population"]
 
 
 @pytest.mark.parametrize(

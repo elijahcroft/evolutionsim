@@ -5,6 +5,126 @@ and what the next task is.
 
 ---
 
+## Milestone 3 — ecological tick
+
+**Status: complete.** 261 tests passing.
+
+### Completed
+
+- **`src/evosim/life/energy.py` — the cost and intake seam.** Every expenditure (basal with
+  Kleiber scaling and a Q10 on body temperature, tissue upkeep, body support, locomotion,
+  sensing, thermoregulation, armour) and both M3 intake channels (autotrophy, detritivory) are
+  broadcasting NumPy expressions over explicit arrays rather than methods on an organism.
+  That shape is what lets the movement layer evaluate the *same* intake formula at five
+  candidate cells at once, so habitat preference cannot drift out of agreement with what
+  actually feeds an organism. `Environment.sample` gathers every world field an organism
+  experiences in one place, so nothing downstream indexes a grid.
+
+- **Two limits, applied in physiological then environmental order.** Planetary oxygen sets an
+  aerobic scope that caps intake at a multiple of basal cost and, by inverting the locomotion
+  equation exactly, caps realized speed at what that scope can pay for. A shared cell pool then
+  caps what may actually be drawn: `apply_resource_contention` scales every organism in an
+  oversubscribed cell by the same factor, in two bin-counts and a gather. This is the whole of
+  density dependence in M3 — nothing anywhere counts neighbours, but a cell's pool is finite.
+
+- **`mortality.py` — hazards, senescence, and starvation.** Thermal, radiation, toxicity, and
+  pressure hazards share one saturating shape, so a mild excursion is survivable and a large one
+  is merely very likely to kill; a threshold would make evolution look like a step function.
+  Hazards combine as `1 - prod(1 - h)` rather than by addition, so no combination can exceed
+  certainty. Radiation and pressure tolerance *divide* their mismatch, giving diminishing
+  returns that stop a hostile planet from selecting every tolerance to its bound. Starvation is
+  deterministic: an empty ledger is an outcome, not a risk.
+
+- **`movement.py` — neighbour choice with no coefficients of its own.** Cells are scored with
+  the energy model itself, that score is divided by the organism's own basal cost to become a
+  choice weight (so "worth moving for" means the same thing at every body size without an
+  arbitrary temperature constant), and `sense_range` gates how much of the comparison an
+  organism can perceive. Sub-unit speeds round stochastically, because rounding down would
+  delete the entire lower half of the `move_speed` locus from selection. The only Python loop is
+  over step index, bounded by the fastest organism alive, so cost scales with movement performed
+  rather than with population size.
+
+- **`src/evosim/sim.py` — the first real biological tick.** Age, sense and move, pay, eat, die,
+  regrow — in that order, and the order is documented as a decision. Moving before feeding is
+  what makes movement worth its cost; regrowing last means a cell cannot be harvested and
+  replenished within one tick. `TickStats` breaks costs and deaths out by cause, because "500
+  died" would make the project's explainability goal unachievable.
+
+- **Energy is not conserved; matter is.** Autotrophy creates energy from light, which is the
+  point. But every unit assimilated is removed from a named pool, and every corpse returns its
+  body mass *and* its unspent energy to the detritus of the cell it fell in. Detritivores ingest
+  `energy / digestion_efficiency` and void the unassimilated remainder back into the same cell,
+  so the pool falls by the assimilated amount only. Tests run with regrowth and decay switched
+  off and assert the pools move by exactly the reported draws and deposits.
+
+- **`k_photo` calibrated: 0.030 → 0.300.** M3 is the first milestone able to measure this, and
+  the M0 guess was an order of magnitude too low. The four factors that erode autotrophic intake
+  (light ~0.83, nutrient saturation ~0.67, moisture saturation ~0.87, digestion 0.40) multiply
+  to ~0.19, so *no* founder cell on the reference planet returned its own upkeep and the lineage
+  always died. At 0.300 about 90% of seeded ocean cells are net-positive for the founder genome
+  and the polar 10% are not — a habitable planet with unlivable edges. Reserves now climb from
+  20% to 83% of storage over 30 days.
+
+- **Performance.** `tools/profile_tick.py` now times the real thing. The 40,000-organism /
+  8,192-cell default runs at **14.7 ms per biological tick, about 2.06 million organism-updates
+  per second** (10-tick sample, 15.60 MiB reserved). That is *faster per organism* than M2's
+  substrate pass (1.57 M/s) despite doing far more work, because the M2 benchmark re-expressed
+  every genome each pass while a real tick reads the cached phenotypes. Throughput counts
+  organisms actually stepped, since the population shrinks as the benchmark runs.
+
+- **Acceptance coverage.** 88 new tests. Beyond equation shapes, they pin the *emergent* claims
+  the design documents make, which is what would catch one of them quietly becoming a rule:
+  high gravity shrinks the largest viable body; large bodies are thermally cheaper per unit
+  mass; thin oxygen limits what a large body can earn; diet specialisation costs what it gains
+  because the logits are softmaxed; an autotroph size ceiling exists on the reference planet;
+  and sensing organisms end up on measurably better ground than blind ones over a 40-day run.
+
+### Consequences and known limitations
+
+- **A tick is now real, but a generation is not.** With no reproduction, the founder cohort ages
+  and dies out by roughly day 45. That is the correct M3 outcome, not a failure: the ledger is
+  positive throughout, and deaths are senescence and thermal mismatch rather than starvation.
+  M4 is what closes the loop.
+- **Predation and herbivory are not implemented.** `k_encounter` and the six capture
+  coefficients in `energy.yaml` remain validated but unused; both diet channels that require a
+  second organism belong with reproduction in M4. `aff_herbivore` and `aff_carnivore` are
+  therefore currently pure cost — they take softmax weight away from the two channels that work.
+- **Two coefficients look mistuned but cannot be confirmed until selection exists.**
+  `upkeep_digestion` appears too cheap: raising `digestion_efficiency` from 0.40 to 0.95
+  multiplies intake by 2.4 while adding only ~26% to basal cost, so selection will very likely
+  pin it at its upper bound immediately. And the founder's `temp_optimum` of 15 °C sits well
+  below the ~22 °C mean of the ocean it is seeded into, which is currently the largest single
+  killer at ~5.5% per day. Both are good M4 directional-selection test cases; neither should be
+  "fixed" by hand before the selection machinery can show what they do.
+- **Support cost, not the surface-area exponent, is what caps body size** at the calibrated
+  `k_photo`. The m^0.67 vs m^0.75 mismatch that `energy.yaml` describes is still real but no
+  longer binds inside the `body_size` range; the linear-in-mass support term bites first, around
+  body size 6. The ceiling is still emergent and still physical, but the comment in that file
+  now says which mechanism actually holds.
+- **Atmospheric buoyancy relieves support on land only**, exactly as `energy.yaml` specifies.
+  Physically an aquatic organism should get *more* relief, not none. Left as written rather than
+  invented, and flagged here; adding it is a one-line change to one formula plus a config key.
+- **Movement evaluates only the four adjacent cells**, once per step, so `sense_range` above one
+  cell buys sharper discrimination between neighbours rather than a wider search. It is enough
+  to make sensing earn its cost (measured, not assumed) but it is not real long-range foraging.
+- **Climate remains deterministic and the world remains a single surface layer.** Every M1 and
+  M2 limitation still stands unchanged.
+
+### Next task — Milestone 4: reproduction and selection
+
+Close the loop. Asexual and sexual reproduction driven by `repro_threshold`, `offspring_count`,
+and `parental_investment`, with the M2 recombination and mutation primitives finally invoked;
+`capacity_throttle` recorded when `max_population` binds; offspring dispersal. Then predation
+and herbivory, which need a living prey population to eat.
+
+Verified by: a founder lineage that persists indefinitely rather than dying out at day 45; the
+energy ledger still balancing across births (`reproduction.overhead` > 1 means every birth is
+lossy); and the first directional-selection tests — `temp_optimum` should climb toward the
+ocean's ~22 °C, and `digestion_efficiency` toward its bound, both of which M3 predicts above and
+neither of which it can yet demonstrate.
+
+---
+
 ## Milestone 2 — life substrate
 
 **Status: complete.** 171 tests passing.
