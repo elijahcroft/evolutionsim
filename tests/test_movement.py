@@ -233,9 +233,13 @@ def test_sensing_improves_the_ground_a_population_actually_occupies(config: Conf
     chosen correctly, and a test that demanded cooler cells would be asserting a preference the
     energy model does not have.
 
-    A blind population ends up *worse* off than it started, because it eats down the cell it is
-    standing in and then wanders off it at random.  Sensing is what turns that into a gain, so
-    the comparison is between sighted and blind rather than against one.
+    The comparison is between sighted and blind rather than against an absolute, because the
+    absolute ratio also carries forty days of seasonal drift that has nothing to do with anyone
+    choosing to go anywhere.  Only the difference between the two isolates movement.
+
+    The sense values are kept low enough that the sensory cost does not starve anyone: at
+    `sense_range` 2 on a founder-sized body the population collapses, and the survivors' ratio
+    would then measure selective death rather than migration.
     """
     from evosim.sim import Simulation
 
@@ -243,6 +247,9 @@ def test_sensing_improves_the_ground_a_population_actually_occupies(config: Conf
         "energy.mortality.background=0.0",
         "energy.mortality.h_thermal_max=0.0",
         "genome.loci.senescence_rate.init=0.0",
+        # Reproduction is switched off as well as mortality: births in good cells would move
+        # the statistic by demography rather than by anyone choosing to go anywhere.
+        "genome.loci.maturity_age.init=3000.0",
         "genome.loci.move_speed.init=1.0",
         "sim.initial_population=400",
         "planet.grid_width=64",
@@ -277,9 +284,8 @@ def test_sensing_improves_the_ground_a_population_actually_occupies(config: Conf
         simulation.run(40)
         return net_yield() / before
 
-    ratios = [improvement(sense) for sense in (0.0, 0.5, 2.0)]
+    ratios = [improvement(sense) for sense in (0.0, 0.4, 1.0)]
     assert np.all(np.diff(ratios) > 0.0), ratios
-    assert ratios[0] < 1.0 < ratios[-1]
 
 
 def test_movement_consumes_only_the_move_stream(config: Config):

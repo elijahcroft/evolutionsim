@@ -141,8 +141,15 @@ def _print_tick_stats(stats: TickStats) -> None:
     Intake and cost are shown beside each other because their difference is the single number
     that says whether the planet can currently support the lineage at all.
     """
+    print(f"  last tick births   : {stats.births} from {stats.breeding_parents} parents "
+          f"({stats.sexual_births} sexual)")
     print(f"  last tick deaths   : {stats.deaths} "
           f"({stats.deaths_starvation} starved, {stats.deaths_hazard} hazard)")
+    if stats.capacity_throttle:
+        # sim.yaml is explicit that a run which spends time at the cap is not measuring a
+        # natural carrying capacity and must say so.
+        print(f"  capacity throttle  : {stats.capacity_throttle} births dropped at the "
+              f"population cap")
     print(f"  last tick intake   : {stats.energy_intake:.4g} "
           f"({stats.intake_autotrophy:.4g} autotrophy, "
           f"{stats.intake_detritivory:.4g} detritivory)")

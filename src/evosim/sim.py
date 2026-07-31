@@ -15,15 +15,19 @@ followed exactly:
    supply, and the corresponding stock is removed from the world.
 5. **Die.** Environmental hazards, senescence, and an empty ledger.  Corpses become detritus in
    the cell where they fell.
-6. **Regrow.** Climate advances and resource pools recover.
+6. **Breed.** Survivors with enough reserve convert it into offspring.
+7. **Regrow.** Climate advances and resource pools recover.
 
 Moving before feeding is what makes movement worth its cost: an organism that finds a better
-cell eats there the same day.  Regrowing last means organisms consume the world as they found
-it that morning, so a cell cannot be harvested and replenished within a single tick.
+cell eats there the same day.  Breeding after mortality means the dead do not reproduce and
+newborns are not aged, fed, or killed on the day they are born.  Regrowing last means organisms
+consume the world as they found it that morning, so a cell cannot be harvested and replenished
+within a single tick.
 
 Energy is not conserved -- autotrophy creates it from light, which is the point -- but *matter*
-is.  Every unit of nutrient or detritus an organism assimilates is removed from a pool, and
-every corpse is returned to one.  :class:`TickStats` reports both sides so the ledger can be
+is.  Every unit of nutrient or detritus an organism assimilates is removed from a pool; every
+corpse is returned to one; and the energy lost to ``reproduction.overhead`` is deposited as
+detritus rather than deleted.  :class:`TickStats` reports every side so the ledger can be
 checked rather than trusted.
 """
 
@@ -46,6 +50,7 @@ from evosim.life.energy import (
 from evosim.life.mortality import MortalityModel, starved
 from evosim.life.movement import MovementModel
 from evosim.life.population import Population
+from evosim.life.reproduction import BirthStats, ReproductionModel
 from evosim.rng import RngBundle
 from evosim.world import World
 
@@ -65,6 +70,12 @@ class TickStats:
     deaths: int
     deaths_starvation: int
     deaths_hazard: int
+    births: int
+    sexual_births: int
+    breeding_parents: int
+    capacity_throttle: int
+    energy_to_offspring: float
+    energy_reproduction_overhead: float
     energy_intake: float
     energy_cost: float
     cost_basal: float
@@ -88,6 +99,12 @@ class TickStats:
 
         return self.energy_intake - self.energy_cost
 
+    @property
+    def growth(self) -> int:
+        """Net change in living organisms; the number a lineage's survival turns on."""
+
+        return self.births - self.deaths
+
 
 @dataclass(slots=True)
 class Simulation:
@@ -100,6 +117,7 @@ class Simulation:
     energy: EnergyModel
     mortality: MortalityModel
     movement: MovementModel
+    reproduction: ReproductionModel
     last_stats: TickStats | None = field(default=None)
 
     @classmethod
@@ -117,6 +135,7 @@ class Simulation:
             energy=EnergyModel.from_config(config),
             mortality=MortalityModel.from_config(config),
             movement=MovementModel.for_world(world),
+            reproduction=ReproductionModel.for_world(config, world, population.schema),
         )
 
     @property
@@ -174,15 +193,17 @@ class Simulation:
         ).astype(np.float32)
 
         deposited, starvation_deaths, hazard_deaths = self._reap(arrival)
+        births = self.reproduction.reproduce(population, self.world, self.rng)
 
         self.world.step()
         stats = self._summarise(
             costs=costs,
             intake=intake,
-            deposited=deposited,
+            deposited=deposited + births.energy_overhead,
             starvation_deaths=starvation_deaths,
             hazard_deaths=hazard_deaths,
             cells_moved=int(moved.sum()),
+            births=births,
         )
         self.last_stats = stats
         return stats
@@ -286,6 +307,7 @@ class Simulation:
         starvation_deaths: int,
         hazard_deaths: int,
         cells_moved: int,
+        births: BirthStats,
     ) -> TickStats:
         """Reduce the tick's arrays to the scalars a run log can carry."""
 
@@ -303,6 +325,12 @@ class Simulation:
             deaths=starvation_deaths + hazard_deaths,
             deaths_starvation=starvation_deaths,
             deaths_hazard=hazard_deaths,
+            births=births.births,
+            sexual_births=births.sexual_births,
+            breeding_parents=births.parents,
+            capacity_throttle=births.throttled,
+            energy_to_offspring=births.energy_invested,
+            energy_reproduction_overhead=births.energy_overhead,
             energy_intake=float(intake.total.sum()),
             energy_cost=float(costs.total.sum()),
             cost_basal=float(costs.basal.sum()),

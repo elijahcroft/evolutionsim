@@ -63,9 +63,18 @@ loci:
   - name: temp_optimum
     low: -30.0
     high: 80.0
-    init: 15.0
+    init: 22.0
     sigma: 0.90
     doc: "Body temperature at which thermoregulation is free."
+    # Calibrated in M4. The obvious choice is Earth's 15 C mean, but the founder is seeded into
+    # water, and this world model's ocean averages ~21.8 C (base_temperature_c -18 plus
+    # insolation_amplitude_c 48 times a mean ocean insolation of ~0.83). A founder at 15 C
+    # therefore spends its entire life outside its own free thermal window, paying both a
+    # thermoregulation cost and a ~5.5%/day thermal hazard, and goes extinct around day 500 --
+    # before selection can walk a locus whose sigma is 0.90 the seven degrees it needs.
+    # A seed lineage that cannot survive its own seeding habitat tests nothing. Directional
+    # selection on this locus is now tested deliberately instead, by seeding a mismatched
+    # founder on a controlled world and watching it climb.
   - name: temp_tolerance
     low: 0.0
     high: 45.0

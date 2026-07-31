@@ -221,11 +221,31 @@ def test_extinction_is_stable():
     assert simulation.day == 6
 
 
-def test_senescence_ends_a_generation_that_cannot_reproduce():
-    """M3 has no reproduction, so a healthy population must still die of old age."""
-    simulation = Simulation.create(small())
+def test_a_cohort_that_cannot_reproduce_dies_of_old_age():
+    """Senescence must still end a generation when nothing replaces it.
+
+    This was M3's whole-run outcome. Reproduction is disabled here rather than deleting the
+    test, because "the population survives" must remain a statement about births outpacing
+    deaths and not an accident of organisms being unable to die.
+
+    Breeding is blocked by making it unaffordable. `repro_threshold` at 1.0 does not work --
+    energy is clipped at storage capacity, so that threshold is reached exactly rather than
+    never -- and raising `maturity_age` would also switch off the senescence this is testing,
+    because senescence is measured in units of maturity age.
+    """
+    simulation = Simulation.create(small(["energy.reproduction.overhead=1e9"]))
     simulation.run(200)
     assert simulation.population.size == 0
+
+
+def test_a_founder_lineage_persists_beyond_its_first_generation():
+    """The milestone 4 criterion: the lineage outlives the cohort that started it."""
+    simulation = Simulation.create(small())
+    simulation.run(300)
+    population = simulation.population
+    assert population.size > 0
+    # Nobody alive is a founder, so this is descendants rather than long-lived originals.
+    assert np.all(population.generation[population.active] > 0)
 
 
 # -- determinism ------------------------------------------------------------------------------------
