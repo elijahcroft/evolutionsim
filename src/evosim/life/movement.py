@@ -32,8 +32,11 @@ from typing import TypeAlias
 import numpy as np
 from numpy.typing import NDArray
 
+from evosim.life.census import CellCensus
 from evosim.life.energy import EnergyModel
 from evosim.life.population import Population
+from evosim.life.predation import PredationModel
+from evosim.life.sampling import stochastic_round
 from evosim.world import World
 
 FloatArray: TypeAlias = NDArray[np.float64]
@@ -42,18 +45,6 @@ IntArray: TypeAlias = NDArray[np.int64]
 # Candidate 0 is "stay"; candidates 1..4 are the north/east/south/west neighbours in the order
 # Grid.neighbour_indices returns them, so candidate index minus one is a heading.
 _STAY = 0
-
-
-def stochastic_round(values: FloatArray, rng: np.random.Generator) -> IntArray:
-    """Round to whole units without bias.
-
-    A speed of 0.2 cells per tick must mean one step every fifth tick, not zero steps forever
-    and not one step every tick.  Rounding down would make every sub-unit speed identical to
-    zero and delete the entire lower half of the ``move_speed`` locus from selection.
-    """
-
-    floor = np.floor(values)
-    return (floor + (rng.random(values.shape) < (values - floor))).astype(np.int64)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +87,8 @@ class MovementModel:
         population: Population,
         world: World,
         energy: EnergyModel,
+        predation: PredationModel,
+        census: CellCensus,
         speed: FloatArray,
         basal: FloatArray,
         rng: np.random.Generator,
@@ -117,7 +110,9 @@ class MovementModel:
             movers = np.flatnonzero(remaining > step)
             if movers.size == 0:
                 break
-            self._take_one_step(population, world, energy, basal, rng, movers)
+            self._take_one_step(
+                population, world, energy, predation, census, basal, rng, movers
+            )
             moved[movers] += 1
         return moved
 
@@ -126,6 +121,8 @@ class MovementModel:
         population: Population,
         world: World,
         energy: EnergyModel,
+        predation: PredationModel,
+        census: CellCensus,
         basal: FloatArray,
         rng: np.random.Generator,
         movers: IntArray,
@@ -149,6 +146,26 @@ class MovementModel:
             world.climate.moisture.ravel()[lookup],
             world.resources.detritus.ravel()[lookup],
             world.climate.temperature_c.ravel()[lookup],
+        )
+        # Other organisms are food and danger as well as competition, and both sides of that
+        # are priced by the predation model rather than by anything invented here. `fear`
+        # weights the danger: at one an organism values its life at exactly what a predator
+        # would gain from it, below one it discounts the risk, above one it is skittish.
+        score = score + predation.expected_gain(
+            phenotype,
+            census.occupancy[lookup],
+            census.mass[lookup],
+            census.speed[lookup],
+            census.autotroph[lookup],
+            census.carcass_value[lookup],
+        ) - phenotype.trait("fear").astype(np.float64)[:, None] * predation.expected_risk(
+            phenotype,
+            census.threat[lookup],
+            census.occupancy[lookup],
+            census.hunter_mass[lookup],
+            census.speed[lookup],
+            census.hunter_sense[lookup],
+            census.hunter_aggression[lookup],
         )
 
         scale = np.maximum(basal[movers], np.finfo(np.float64).tiny)

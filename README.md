@@ -14,14 +14,17 @@ history.
 
 ## Status
 
-**Milestone 3 of 8 — the ecological tick.** Organisms now live: they age, sense and move over
-grid neighbours, pay for every gram of body they carry, feed from finite cell resources, and die
-of hazards, senescence, or an empty ledger. Energy is not conserved — autotrophy creates it from
-light — but matter is, and the tests prove it.
+**Milestone 4 of 8 — reproduction, selection, and the food web.** The loop is closed. Organisms
+age, move, feed, hunt, die, and breed; a founder cohort is now a lineage that outlives it by
+hundreds of generations. Selection is real and measured: seed a lineage two degrees below the
+temperature of the water it lives in and its descendants climb toward it, and the same founder
+on a colder planet ends up colder — with nothing in the code naming a fitness function.
 
-They do not yet reproduce, so the founder cohort dies of old age around day 45. That is the
-correct boundary, not a bug: reproduction, selection, and predation are Milestone 4. See
-[DEVLOG.md](DEVLOG.md) for exactly what is and is not implemented.
+Predation and herbivory work, but no predatory lineage arises on the reference planet by itself:
+the traits that make hunting pay only pay once several of them are large at once, so it sits
+across a fitness valley. Species, lineage history, and extinction records are Milestone 5. See
+[DEVLOG.md](DEVLOG.md) for exactly what is and is not implemented, including two calibration
+findings and one bug where the population cap was quietly doing selection of its own.
 
 ## Setup
 

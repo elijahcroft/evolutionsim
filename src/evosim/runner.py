@@ -157,6 +157,10 @@ def _print_tick_stats(stats: TickStats) -> None:
           f"(basal {stats.cost_basal:.4g}, support {stats.cost_support:.4g}, "
           f"thermo {stats.cost_thermoregulation:.4g})")
     print(f"  last tick net      : {stats.net_energy:+.4g}")
+    if stats.attacks:
+        print(f"  last tick hunting  : {stats.kills} kills from {stats.attacks} attacks by "
+              f"{stats.hunters} hunters ({stats.intake_predation:.4g} eaten, "
+              f"{stats.carrion_returned:.4g} left as carrion)")
     print(f"  cells moved        : {stats.cells_moved}")
     print(f"  mean energy        : {stats.mean_energy:.4g} "
           f"({stats.mean_energy_fullness:.1%} of storage)")

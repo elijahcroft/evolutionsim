@@ -13,9 +13,11 @@ import numpy as np
 import pytest
 
 from evosim.config import Config
+from evosim.life.census import CellCensus
 from evosim.life.energy import EnergyModel
 from evosim.life.movement import MovementModel, stochastic_round
 from evosim.life.population import Population
+from evosim.life.predation import PredationModel
 from evosim.rng import RngBundle
 from evosim.world import World
 
@@ -37,6 +39,17 @@ def build(config: Config, seed: int = 0, **traits: float):
             population.genomes[active, schema.index_of(name), :] = value
         population.phenotypes.update(0, population.genomes[active], schema)
     return world, population, EnergyModel.from_config(config), MovementModel.for_world(world), rng
+
+
+def step(movement, population, world, energy, speed, basal, rng, config):
+    """Drive one movement pass, building the per-cell census the way the tick does."""
+    predation = PredationModel.from_config(config)
+    census = CellCensus.build(
+        population, config.energy.energy_density, config.energy.intake.k_encounter
+    )
+    return movement.move(
+        population, world, energy, predation, census, speed, basal, rng
+    )
 
 
 def basal_of(population: Population, energy: EnergyModel) -> np.ndarray:
@@ -71,8 +84,9 @@ def test_stochastic_round_is_exact_on_whole_numbers():
 
 def test_a_sub_unit_speed_still_moves_the_population(config: Config):
     world, population, energy, movement, rng = build(config, move_speed=0.2)
-    moved = movement.move(
-        population, world, energy, np.full(population.size, 0.2), basal_of(population, energy), rng.move
+    moved = step(
+        movement, population, world, energy, np.full(population.size, 0.2),
+        basal_of(population, energy), rng.move, config,
     )
     assert 0 < moved.sum() < population.size
 
@@ -107,9 +121,7 @@ def test_thin_oxygen_slows_a_population_down(config: Config):
 def test_a_stationary_organism_never_changes_cell(config: Config):
     world, population, energy, movement, rng = build(config, move_speed=0.0)
     before = population.cell[population.active].copy()
-    movement.move(
-        population, world, energy, np.zeros(population.size), basal_of(population, energy), rng.move
-    )
+    step(movement, population, world, energy, np.zeros(population.size), basal_of(population, energy), rng.move, config)
     assert np.array_equal(population.cell[population.active], before)
 
 
@@ -117,9 +129,9 @@ def test_headings_survive_a_tick_spent_standing_still(config: Config):
     """Persistence is only meaningful if a remembered direction outlives an idle tick."""
     world, population, energy, movement, rng = build(config, move_speed=1.0)
     basal = basal_of(population, energy)
-    movement.move(population, world, energy, np.ones(population.size), basal, rng.move)
+    step(movement, population, world, energy, np.ones(population.size), basal, rng.move, config)
     headings = population.heading[population.active].copy()
-    movement.move(population, world, energy, np.zeros(population.size), basal, rng.move)
+    step(movement, population, world, energy, np.zeros(population.size), basal, rng.move, config)
     assert np.array_equal(population.heading[population.active], headings)
 
 
@@ -130,7 +142,7 @@ def test_movement_never_leaves_the_grid(config: Config):
     world, population, energy, movement, rng = build(config, move_speed=6.0, sense_range=8.0)
     basal = basal_of(population, energy)
     for _ in range(20):
-        movement.move(population, world, energy, np.full(population.size, 6.0), basal, rng.move)
+        step(movement, population, world, energy, np.full(population.size, 6.0), basal, rng.move, config)
         cells = population.cell[population.active]
         assert np.all((cells >= 0) & (cells < world.grid.n_cells))
 
@@ -139,9 +151,7 @@ def test_movement_only_ever_visits_an_adjacent_cell_per_step(config: Config):
     world, population, energy, movement, rng = build(config, move_speed=1.0, sense_range=8.0)
     neighbours = world.grid.neighbour_indices().reshape(world.grid.n_cells, 4)
     before = population.cell[population.active].copy()
-    movement.move(
-        population, world, energy, np.ones(population.size), basal_of(population, energy), rng.move
-    )
+    step(movement, population, world, energy, np.ones(population.size), basal_of(population, energy), rng.move, config)
     after = population.cell[population.active]
     reachable = np.concatenate((before[:, None], neighbours[before]), axis=1)
     assert np.all((after[:, None] == reachable).any(axis=1))
@@ -151,9 +161,7 @@ def test_headings_point_at_the_cell_actually_entered(config: Config):
     world, population, energy, movement, rng = build(config, move_speed=1.0, sense_range=8.0)
     neighbours = world.grid.neighbour_indices().reshape(world.grid.n_cells, 4)
     before = population.cell[population.active].copy()
-    movement.move(
-        population, world, energy, np.ones(population.size), basal_of(population, energy), rng.move
-    )
+    step(movement, population, world, energy, np.ones(population.size), basal_of(population, energy), rng.move, config)
     after = population.cell[population.active]
     heading = population.heading[population.active]
     stepped = after != before
@@ -171,12 +179,18 @@ def test_sense_range_earns_better_foraging_ground(config: Config):
 
     Without this, `sense_range` would be a cost with nothing to buy and selection would drive
     it to zero on every planet, which would silently remove predation's precondition.
+
+    Encounters are switched off for this one. The setup stacks the whole population into a
+    single cell, which to a sharp-eyed organism is not a crowd but a larder -- and staying put
+    to eat one's neighbours is the correct answer to that, just not the question being asked.
+    Prey-seeking is tested on its own below.
     """
+    quiet = Config.load(overrides=["energy.intake.k_encounter=0.0"])
     target = None
     reached = {}
     for sense in (0.0, 8.0):
         world, population, energy, movement, rng = build(
-            config, seed=11, move_speed=1.0, sense_range=sense, move_persistence=0.0
+            quiet, seed=11, move_speed=1.0, sense_range=sense, move_persistence=0.0
         )
         # One cell is made far richer than everything around it, and the whole population is
         # placed on its western neighbour so the choice is a real one.
@@ -188,9 +202,7 @@ def test_sense_range_earns_better_foraging_ground(config: Config):
         world.resources.nutrients.reshape(-1)[centre] = 50.0
         world.climate.insolation.reshape(-1)[centre] = 5.0
 
-        movement.move(
-            population, world, energy, np.ones(population.size), basal_of(population, energy), rng.move
-        )
+        step(movement, population, world, energy, np.ones(population.size), basal_of(population, energy), rng.move, quiet)
         reached[sense] = int(np.count_nonzero(population.cell[population.active] == centre))
 
     assert reached[8.0] > reached[0.0]
@@ -202,9 +214,7 @@ def test_a_blind_population_spreads_over_every_direction(config: Config):
         config, seed=12, move_speed=1.0, sense_range=0.0, move_persistence=0.0
     )
     population.cell[population.active] = world.grid.n_cells // 2 + 17
-    movement.move(
-        population, world, energy, np.ones(population.size), basal_of(population, energy), rng.move
-    )
+    step(movement, population, world, energy, np.ones(population.size), basal_of(population, energy), rng.move, config)
     assert len(np.unique(population.cell[population.active])) == 5
 
 
@@ -218,7 +228,7 @@ def test_persistence_biases_a_blind_walk_toward_the_remembered_heading(config: C
     neighbours = world.grid.neighbour_indices().reshape(world.grid.n_cells, 4)
     east = neighbours[world.grid.n_cells // 2 + 17, 1]
 
-    movement.move(population, world, energy, np.ones(population.size), basal, rng.move)
+    step(movement, population, world, energy, np.ones(population.size), basal, rng.move, config)
     went_east = np.count_nonzero(population.cell[population.active] == east)
     assert went_east > population.size / 5.0
 
@@ -292,9 +302,99 @@ def test_movement_consumes_only_the_move_stream(config: Config):
     """Movement must not disturb any other subsystem's position in its own stream."""
     world, population, energy, movement, rng = build(config, move_speed=2.0)
     before = rng.get_state()["streams"]
-    movement.move(
-        population, world, energy, np.full(population.size, 2.0), basal_of(population, energy), rng.move
+    step(
+        movement, population, world, energy, np.full(population.size, 2.0),
+        basal_of(population, energy), rng.move, config,
     )
     after = rng.get_state()["streams"]
     changed = {name for name in before if before[name] != after[name]}
     assert changed == {"move"}
+
+
+# -- prey seeking and fear -------------------------------------------------------------------
+
+
+def crowd_next_door(config: Config, seed: int, decider: dict, crowd: dict | None = None):
+    """One decider beside a cell packed with organisms of a separately chosen kind.
+
+    The crowd's genome is set apart from the decider's on purpose. Giving them the same one
+    would make "does a hunter approach prey" really ask "does a hunter approach other hunters",
+    and the meal and the danger would then move together and cancel.
+    """
+    world, population, energy, movement, rng = build(config, seed=seed)
+    schema = population.schema
+    for name, value in (crowd or {}).items():
+        population.genomes[:, schema.index_of(name), :] = value
+    for name, value in decider.items():
+        population.genomes[0, schema.index_of(name), :] = value
+    population.phenotypes.update(0, population.genomes[: population.size], schema)
+
+    neighbours = world.grid.neighbour_indices().reshape(world.grid.n_cells, 4)
+    home = int(world.grid.n_cells // 2 + 37)
+    east = int(neighbours[home, 1])
+    population.cell[population.active] = east
+    population.cell[0] = home
+    population.heading[population.active] = -1
+    return world, population, energy, movement, rng, home, east
+
+
+def where_does_it_go(
+    config: Config, trials: int, decider: dict, crowd: dict | None = None
+) -> float:
+    """Share of runs in which the lone decider walks into the crowded cell."""
+    entered = 0
+    for seed in range(trials):
+        world, population, energy, movement, rng, home, east = crowd_next_door(
+            config, seed, decider, crowd
+        )
+        speed = np.zeros(population.size)
+        speed[0] = 1.0
+        step(
+            movement, population, world, energy, speed,
+            basal_of(population, energy), rng.move, config,
+        )
+        entered += int(population.cell[0] == east)
+    return entered / trials
+
+
+HUNTER_TRAITS = {
+    "sense_range": 4.0,
+    "aggression": 5.0,
+    "aff_herbivore": 4.0,
+    "aff_autotroph": -2.0,
+    "fear": 0.0,
+    "move_persistence": 0.0,
+}
+
+
+def test_a_hunter_walks_toward_prey(config: Config):
+    """genome.yaml defines `sense_range` as habitat *and prey* detection.
+
+    Without this half, a predator wanders off its own food supply and predation cannot function
+    in a spatial world at all -- it kills whatever shares its cell and then leaves.
+
+    The control is the same hunter on a planet where encounters do not happen, which isolates
+    prey-seeking from every other reason a cell might look good.
+    """
+    blind_to_prey = Config.load(overrides=["energy.intake.k_encounter=0.0"])
+    assert where_does_it_go(config, 12, HUNTER_TRAITS) > where_does_it_go(
+        blind_to_prey, 12, HUNTER_TRAITS
+    )
+
+
+def test_fear_drives_prey_away_from_a_dangerous_cell(config: Config):
+    """`fear` weights being eaten against being fed, on the one scale the model has.
+
+    The crowd here is made of hunters and the decider is ordinary prey, so the cell offers it
+    almost nothing to eat and a great deal of danger. An organism that values its life at
+    nothing still drifts in; one that overvalues it stays out. Without this the locus is dead
+    config and prey have no behavioural defence at all.
+    """
+    dangerous = {"aggression": 5.0, "sense_range": 4.0}
+    fearless = where_does_it_go(
+        config, 12, {"fear": 0.0, "sense_range": 1.0, "move_persistence": 0.0}, dangerous
+    )
+    timid = where_does_it_go(
+        config, 12, {"fear": 5.0, "sense_range": 1.0, "move_persistence": 0.0}, dangerous
+    )
+    assert timid < fearless

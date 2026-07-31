@@ -40,6 +40,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from evosim.config import Config
+from evosim.life.census import CellCensus
 from evosim.life.energy import (
     Costs,
     EnergyModel,
@@ -50,6 +51,7 @@ from evosim.life.energy import (
 from evosim.life.mortality import MortalityModel, starved
 from evosim.life.movement import MovementModel
 from evosim.life.population import Population
+from evosim.life.predation import HuntStats, PredationModel
 from evosim.life.reproduction import BirthStats, ReproductionModel
 from evosim.rng import RngBundle
 from evosim.world import World
@@ -70,6 +72,12 @@ class TickStats:
     deaths: int
     deaths_starvation: int
     deaths_hazard: int
+    deaths_predation: int
+    attacks: int
+    kills: int
+    hunters: int
+    intake_predation: float
+    carrion_returned: float
     births: int
     sexual_births: int
     breeding_parents: int
@@ -117,6 +125,7 @@ class Simulation:
     energy: EnergyModel
     mortality: MortalityModel
     movement: MovementModel
+    predation: PredationModel
     reproduction: ReproductionModel
     last_stats: TickStats | None = field(default=None)
 
@@ -135,6 +144,7 @@ class Simulation:
             energy=EnergyModel.from_config(config),
             mortality=MortalityModel.from_config(config),
             movement=MovementModel.for_world(world),
+            predation=PredationModel.from_config(config),
             reproduction=ReproductionModel.for_world(config, world, population.schema),
         )
 
@@ -175,8 +185,20 @@ class Simulation:
         # of steps. That is the correct pairing: the cost is the expected work, and the steps
         # are one unbiased sample of it, so the two agree over a lifetime rather than per tick.
         speed = self.movement.realized_speed(population, self.energy, drag, basal)
+        census = CellCensus.build(
+            population,
+            self.config.energy.energy_density,
+            self.config.energy.intake.k_encounter,
+        )
         moved = self.movement.move(
-            population, self.world, self.energy, speed, basal, self.rng.move
+            population,
+            self.world,
+            self.energy,
+            self.predation,
+            census,
+            speed,
+            basal,
+            self.rng.move,
         )
 
         arrival = Environment.sample(self.world, population.cell[active])
@@ -184,26 +206,41 @@ class Simulation:
         intake = self._feed(arrival, basal)
 
         # Storage capacity is a hard ceiling: an organism with nowhere to put a surplus simply
-        # does not keep it. In M4 that surplus becomes offspring instead.
+        # does not keep it. That surplus becomes offspring at the breeding stage below.
+        capacity = phenotype.storage_capacity.astype(np.float64)
         updated = (
             population.energy[active].astype(np.float64) + intake.total - costs.total
         )
-        population.energy[active] = np.minimum(
-            updated, phenotype.storage_capacity.astype(np.float64)
-        ).astype(np.float32)
+        settled = np.minimum(updated, capacity)
 
-        deposited, starvation_deaths, hazard_deaths = self._reap(arrival)
+        # Hunting happens on settled ledgers, so a carcass is worth what its owner actually had
+        # rather than what it held before paying for the day. What an attacker may take up is
+        # bounded twice: by the room left in its reserve, and by the same aerobic ceiling that
+        # limits passive intake -- energy.yaml caps *all* intake at a multiple of basal cost, and
+        # a predator is not exempt from its own metabolism.
+        allowance = np.minimum(
+            capacity - settled,
+            np.maximum(self.energy.aerobic_scope * basal - intake.total, 0.0),
+        )
+        gained, predated, hunt = self.predation.hunt(
+            population, self.world, self.rng.encounter, allowance
+        )
+        population.energy[active] = (settled + gained).astype(np.float32)
+
+        deposited, starvation, hazard, predation = self._reap(arrival, predated)
         births = self.reproduction.reproduce(population, self.world, self.rng)
 
         self.world.step()
         stats = self._summarise(
             costs=costs,
             intake=intake,
-            deposited=deposited + births.energy_overhead,
-            starvation_deaths=starvation_deaths,
-            hazard_deaths=hazard_deaths,
+            deposited=deposited + births.energy_overhead + hunt.carrion_returned,
+            starvation_deaths=starvation,
+            hazard_deaths=hazard,
+            predation_deaths=predation,
             cells_moved=int(moved.sum()),
             births=births,
+            hunt=hunt,
         )
         self.last_stats = stats
         return stats
@@ -260,11 +297,18 @@ class Simulation:
         )
         return intake
 
-    def _reap(self, environment: Environment) -> tuple[float, int, int]:
+    def _reap(
+        self,
+        environment: Environment,
+        predated: NDArray[np.bool_],
+    ) -> tuple[float, int, int, int]:
         """Kill, return the dead to the detritus pool, and compact the population.
 
         A corpse carries both the body that was built and whatever the organism had not yet
-        spent, so nothing an organism accumulated leaves the world when it dies.
+        spent, so nothing an organism accumulated leaves the world when it dies.  Organisms
+        killed by a predator are excluded from that deposit: the hunt already split their
+        carcass between the killer and the ground, and depositing it again would let a food web
+        manufacture matter.
         """
 
         population = self.population
@@ -276,27 +320,29 @@ class Simulation:
         )
         hazard_dead = self.rng.death.random(population.size) < hazards.combined
         starvation_dead = starved(population.energy[active])
-        dead = hazard_dead | starvation_dead
+        dead = hazard_dead | starvation_dead | predated
         if not np.any(dead):
-            return 0.0, 0, 0
+            return 0.0, 0, 0, 0
 
-        # Starvation is checked after the hazard roll but reported ahead of it: an organism that
-        # ran out of energy died of that regardless of what the dice said.
-        starvation_deaths = int(np.count_nonzero(starvation_dead))
-        hazard_deaths = int(np.count_nonzero(dead)) - starvation_deaths
+        # Deaths are attributed in a fixed order so the causes always sum to the total: being
+        # eaten beats an empty ledger, which beats whatever the hazard dice said.
+        predation_deaths = int(np.count_nonzero(predated))
+        starvation_deaths = int(np.count_nonzero(starvation_dead & ~predated))
+        hazard_deaths = int(np.count_nonzero(dead)) - predation_deaths - starvation_deaths
 
+        buried = dead & ~predated
         corpse = (
-            self.config.energy.energy_density * phenotype.mass[dead].astype(np.float64)
-            + np.maximum(population.energy[active][dead].astype(np.float64), 0.0)
+            self.config.energy.energy_density * phenotype.mass[buried].astype(np.float64)
+            + np.maximum(population.energy[active][buried].astype(np.float64), 0.0)
         )
-        cells = population.cell[active][dead].astype(np.intp)
+        cells = population.cell[active][buried].astype(np.intp)
         deposit = np.bincount(
             cells, weights=corpse, minlength=self.world.grid.n_cells
         ).reshape(self.world.grid.shape)
         self.world.resources.add_detritus(deposit)
 
         population.remove(dead)
-        return float(corpse.sum()), starvation_deaths, hazard_deaths
+        return float(corpse.sum()), starvation_deaths, hazard_deaths, predation_deaths
 
     def _summarise(
         self,
@@ -306,8 +352,10 @@ class Simulation:
         deposited: float,
         starvation_deaths: int,
         hazard_deaths: int,
+        predation_deaths: int,
         cells_moved: int,
         births: BirthStats,
+        hunt: HuntStats,
     ) -> TickStats:
         """Reduce the tick's arrays to the scalars a run log can carry."""
 
@@ -322,9 +370,15 @@ class Simulation:
         return TickStats(
             day=self.world.day,
             population=self.population.size,
-            deaths=starvation_deaths + hazard_deaths,
+            deaths=starvation_deaths + hazard_deaths + predation_deaths,
             deaths_starvation=starvation_deaths,
             deaths_hazard=hazard_deaths,
+            deaths_predation=predation_deaths,
+            attacks=hunt.attacks,
+            kills=hunt.kills,
+            hunters=hunt.hunters,
+            intake_predation=hunt.energy_gained,
+            carrion_returned=hunt.carrion_returned,
             births=births.births,
             sexual_births=births.sexual_births,
             breeding_parents=births.parents,

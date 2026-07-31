@@ -299,11 +299,15 @@ def test_the_tick_reads_no_state_outside_the_simulation():
 def test_the_tick_has_no_per_organism_python_iteration():
     """The same coarse lint the population storage is held to, applied to the tick itself.
 
-    ``Simulation.run`` and ``MovementModel.move`` legitimately loop -- over ticks and over step
-    index respectively -- and are excluded; nothing here may loop over organisms.
+    ``Simulation.run``, ``MovementModel.move`` and ``ReproductionModel._disperse`` legitimately
+    loop -- over ticks and over step index -- and are excluded; nothing here may loop over
+    organisms.
     """
+    from evosim.life.census import CellCensus
     from evosim.life.energy import EnergyModel
     from evosim.life.mortality import MortalityModel
+    from evosim.life.predation import PredationModel
+    from evosim.life.reproduction import ReproductionModel
 
     for method in (
         Simulation.step,
@@ -314,6 +318,15 @@ def test_the_tick_has_no_per_organism_python_iteration():
         EnergyModel.intake_for,
         EnergyModel.foraging_yield,
         MortalityModel.hazards,
+        CellCensus.build,
+        PredationModel.hunt,
+        PredationModel._draw_attacks,
+        PredationModel._spend_allowance,
+        PredationModel.expected_gain,
+        PredationModel.expected_risk,
+        ReproductionModel.reproduce,
+        ReproductionModel._brood_sizes,
+        ReproductionModel._choose_mates,
     ):
         tree = ast.parse(dedent(inspect.getsource(method)))
         forbidden = (ast.For, ast.While, ast.ListComp, ast.SetComp, ast.DictComp)

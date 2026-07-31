@@ -5,6 +5,117 @@ and what the next task is.
 
 ---
 
+## Milestone 4 — reproduction, selection, and the food web
+
+**Status: complete.** 325 tests passing.
+
+### Completed
+
+- **`src/evosim/life/reproduction.py` — the loop closes.** Asexual and sexual reproduction
+  driven by `maturity_age`, `repro_threshold`, `offspring_count`, `parental_investment` and
+  `sex_bias`, finally invoking the M2 recombination and mutation primitives. Four decisions are
+  documented at the top of that module; the one worth repeating is that **offspring are endowed
+  from the parent's storage capacity, not their own**. `energy.yaml` describes the cost in terms
+  of the offspring's capacity, but that depends on a genome which does not exist until the
+  parent has committed to making it. Estimating with the parent costs one mutation step of
+  accuracy and keeps what was paid exactly equal to what was received; a ledger that balances is
+  worth more than a second decimal place.
+
+- **Fecundity is bought, never granted.** A parent that cannot afford its whole brood has a
+  smaller one rather than none, so `offspring_count` is a dial and not a cliff. The
+  `reproduction.overhead` loss is deposited as detritus rather than deleted, closing what would
+  otherwise have been a third hole in the matter ledger.
+
+- **`predation.py` — the two intake channels that need another organism.** Encounter rates scale
+  with local density, capture is a logistic on the documented contest, and `diet_match` decides
+  what a carcass is worth to a particular gut. Nothing declares trophic levels: a predator is
+  any organism whose diet logits carry herbivore or carnivore weight. A prey can only be killed
+  once, and what the killer cannot eat stays in the world as carrion.
+
+- **`census.py` and prey-aware movement.** `genome.yaml` defines `sense_range` as habitat *and
+  prey* detection, and `fear` as a weight on predator density; both halves were unimplemented,
+  which made predation non-functional in space — a hunter would clear its cell and then wander
+  off its own food supply. Cells are now also scored by expected hunting yield and by expected
+  risk, both computed through the identical predation equations, so no new coefficients enter.
+  Risk is priced in the only currency the model has: being eaten costs an organism its body and
+  everything it saved, which is what lets `fear` weigh danger against food on one scale.
+
+- **`sim.py` — two new stages.** The tick is now age → move → pay → eat → **hunt** → die →
+  **breed** → regrow. Hunting resolves on settled ledgers, so a carcass is worth what its owner
+  actually had. Predation kills join hazard and starvation deaths in a single compaction, and a
+  predated organism is excluded from the corpse deposit — depositing it again would let a food
+  web manufacture matter.
+
+- **Two calibration findings.**
+  - **`temp_optimum` init 15.0 → 22.0.** The reference planet's ocean averages ~21.8 °C where
+    founders are seeded. At 15 °C the lineage spent its whole life outside its own thermal
+    window and went extinct around day 500 — before selection could walk a locus with sigma 0.90
+    the seven degrees it needed. A seed lineage that cannot survive its own seeding habitat
+    tests nothing. M3 flagged this exact mismatch as an M4 test case; it turned out to be an
+    initialization defect instead, and the directional-selection property is now tested
+    deliberately rather than relied on by accident.
+  - **The population cap was silently selecting.** Capacity throttling dropped births in
+    parent-row order, and rows are roughly age-ordered after compaction, so the cap imposed
+    selection for the offspring of older parents. It was invisible to every single-tick test and
+    it *reversed* the measured direction of thermal selection. Births over the cap are now
+    dropped at random, and there is a regression test.
+
+- **Acceptance coverage.** 64 new tests. The selection suite is the one M4 exists for: a
+  mismatched `temp_optimum` climbs toward its habitat while a matched one holds; a colder planet
+  selects a colder lineage from the *same* founder; and `digestion_efficiency` climbs, which
+  confirms the prediction M3 recorded but could not test. Each is a comparison rather than an
+  absolute, because a trait mean after 400 ticks is partly drift.
+
+- **Performance.** 33.5 ms per tick at 40,000 organisms, about 1.03 million organism-updates per
+  second — roughly half of M3's 2.06 M/s. The food web costs that: a per-cell census every tick,
+  an expected-yield and expected-risk evaluation at five candidate cells per mover per step, and
+  the encounter/capture resolution itself.
+
+### Consequences and known limitations
+
+- **The reference planet is cap-limited, not resource-limited.** Carrying capacity is above
+  1.5 million organisms — far beyond the 40,000 default `max_population`, which `sim.yaml`
+  already describes as a memory budget rather than a biological statement. A default run reaches
+  the cap around day 400 and stays there. `capacity_throttle` now reports this on every tick and
+  in the CLI, as `sim.yaml` requires, but a run at the cap is not measuring natural carrying
+  capacity and its results should not be read as if it were.
+- **Predation is a fitness valley from the autotroph founder.** A hand-built hunter makes a
+  living: body size 3, high aggression and sensing nets about +0.77 energy per tick, and the
+  test suite pins that. But the *local* gradient at the founder points away from it — shifting
+  diet weight toward herbivory costs more autotrophy than the occasional accidental kill
+  returns, because the traits that make hunting pay only pay once several of them are large at
+  once. Predation therefore occurs on the reference planet (a few hundred kills per tick at the
+  cap) without a predatory lineage arising. Whether `p_large_effect` plus speciation can bridge
+  that valley is an M5 question, not something to tune into existence now.
+- **Surplus killing is bounded but real.** A sated hunter stops, because the aerobic ceiling is
+  spent down across its kills and an attack that yields nothing leaves the prey alive. It can
+  still kill far more than it eats when prey are small relative to its metabolism.
+- **Mate search is same-cell only.** `energy.reproduction.mate_search_radius > 0` raises rather
+  than being silently treated as zero.
+- **The cell census uses means, not distributions.** A cell holding one large predator reads the
+  same as one holding several small ones of equal total threat. Carrying full distributions into
+  a five-cell comparison would cost far more than the decision is worth.
+- **`temp_tolerance` did not measurably decay** over 400 ticks despite being pure upkeep for a
+  thermally matched lineage — its upkeep is ~8% of basal, likely below what drift resolves at
+  these population sizes. "Life gets simpler when simpler is cheaper" is therefore not yet
+  demonstrated, only unfalsified.
+- Every M1–M3 limitation still stands: single surface layer, deterministic climate, no weather,
+  moisture as a distance proxy, and diagnostic output rather than resumable snapshots.
+
+### Next task — Milestone 5: species and history
+
+Give the simulation a memory. Periodic taxonomy over the genetic-distance metric that mate
+compatibility already uses, so that assortative mating and a k-means split test agree on what a
+species is; lineage trees; extinction confirmation via `extinction_confirm_ticks`; and the
+time-series sampling `sample_interval` has been reserving. That is what turns "the population
+changed" into "you can open a species and read why it became what it is".
+
+Verified by: a lineage split into two habitats produces two species rather than one; a species
+whose population goes to zero is declared extinct once and stays that way; and the recorded
+history of a run reproduces from `(config, seed)` alone.
+
+---
+
 ## Milestone 3 — ecological tick
 
 **Status: complete.** 261 tests passing.

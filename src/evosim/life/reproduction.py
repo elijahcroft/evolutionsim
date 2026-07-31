@@ -35,8 +35,9 @@ import numpy as np
 from numpy.typing import NDArray
 
 from evosim.config import Config, ReproductionConfig
+from evosim.life.cells import CellNeighbourhood
 from evosim.life.genome import GenomeSchema
-from evosim.life.movement import stochastic_round
+from evosim.life.sampling import stochastic_round
 from evosim.life.population import UNASSIGNED, Population
 from evosim.rng import RngBundle
 from evosim.world import World
@@ -248,36 +249,22 @@ class ReproductionModel:
         if not np.any(wants_sex):
             return mates, wants_sex
 
-        # Mature organisms are the mating pool. Sorting them by cell turns "find somebody here"
-        # into a pair of searchsorted bounds, which is the whole reason this is not a loop.
+        # Mature organisms are the mating pool.
         phenotype = population.phenotypes.active
-        pool = np.flatnonzero(
-            population.age[population.active] >= phenotype.trait("maturity_age")
+        pool = CellNeighbourhood.build(
+            np.flatnonzero(
+                population.age[population.active] >= phenotype.trait("maturity_age")
+            ),
+            population.cell,
         )
-        order = np.argsort(population.cell[pool], kind="stable")
-        by_cell = pool[order]
-        cells = population.cell[by_cell]
-
         seekers = np.flatnonzero(wants_sex)
         rows = parent_of[seekers]
-        start = np.searchsorted(cells, population.cell[rows], side="left")
-        stop = np.searchsorted(cells, population.cell[rows], side="right")
-        occupants = stop - start
-
-        # Draw from the block excluding the seeker itself, then step over its own slot.
-        position = np.empty(pool.size, dtype=np.int64)
-        position[order] = np.arange(pool.size)
-        own_slot = position[np.searchsorted(pool, rows)]
-        draw = start + (
-            rng.repro.random(rows.size) * np.maximum(occupants - 1, 1)
-        ).astype(np.int64)
-        draw += draw >= own_slot
-        chosen = by_cell[np.clip(draw, 0, by_cell.size - 1)]
+        chosen, found = pool.sample_other(rows, population.cell, rng.repro)
 
         distance = self.schema.genetic_distance(
             population.genomes[rows], population.genomes[chosen]
         )
-        compatible = (occupants >= 2) & (
+        compatible = found & (
             distance <= self.reproduction.mate_compatibility_distance
         )
         mates[seekers] = np.where(compatible, chosen, UNASSIGNED)
