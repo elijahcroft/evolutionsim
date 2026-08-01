@@ -82,23 +82,42 @@ class Session:
             "layers": [{"name": name, "label": label} for name, label in LAYERS.items()],
         }
 
-    def state(self, layer: str) -> dict[str, Any]:
+    def state(self, layer: str, species: int | None = None) -> dict[str, Any]:
         simulation = self.simulation
         return {
             "day": simulation.world.day,
             "population": simulation.population.size,
             "capacity": simulation.population.capacity,
             "extinct": simulation.population.size == 0,
+            "species": len(simulation.history.living()),
             "stats": _stats_payload(simulation.last_stats),
             "history": list(self.history),
-            "layer": self._layer_payload(layer),
+            "layer": self._layer_payload(layer, species),
         }
 
-    def _layer_payload(self, layer: str) -> dict[str, Any]:
+    def species(self) -> dict[str, Any]:
+        """Every species the run has produced, for the list the UI selects from."""
+
+        simulation = self.simulation
+        return {
+            "day": simulation.world.day,
+            "trait_names": list(simulation.population.phenotypes.trait_names),
+            "species": simulation.history.summary(simulation.population),
+        }
+
+    def report(self, species: int) -> dict[str, Any]:
+        """One species in full, including what has changed in it since it appeared."""
+
+        simulation = self.simulation
+        return simulation.history.report(species, simulation.population)
+
+    def _layer_payload(self, layer: str, species: int | None = None) -> dict[str, Any]:
         if layer not in LAYERS:
             raise KeyError(layer)
         if layer == "population":
-            values = self._density()
+            # Restricting density to one species turns the map into a range map, which is how
+            # you see that a split is geographic rather than merely numerical.
+            values = self._density(species)
         elif layer == "elevation_km":
             # Elevation is the one layer drawn relative to sea level, because "is this cell
             # land?" is the question it is actually being read for.
@@ -109,18 +128,27 @@ class Session:
         else:
             values = self.simulation.world.arrays()[layer]
         values = np.asarray(values, dtype=np.float64)
+        # A filter only means anything on the layer that counts organisms, so it is reported as
+        # unset everywhere else rather than being silently accepted and ignored.
+        filtered = species if layer == "population" else None
+        label = LAYERS[layer]
+        if filtered is not None:
+            label = f"{label} — species {filtered}"
         return {
             "name": layer,
-            "label": LAYERS[layer],
+            "label": label,
+            "species": filtered,
             "min": float(values.min()),
             "max": float(values.max()),
             "values": np.round(values, 4).ravel().tolist(),
             "land": self.simulation.world.terrain.land.ravel().tolist(),
         }
 
-    def _density(self) -> np.ndarray:
+    def _density(self, species: int | None = None) -> np.ndarray:
         population = self.simulation.population
         cells = population.cell[population.active].astype(np.intp)
+        if species is not None:
+            cells = cells[population.species_id[population.active] == species]
         grid = self.simulation.world.grid
         return np.bincount(cells, minlength=grid.n_cells).reshape(grid.shape)
 
@@ -145,6 +173,9 @@ def _stats_payload(stats: TickStats | None) -> dict[str, Any] | None:
         "sexual_births": stats.sexual_births,
         "breeding_parents": stats.breeding_parents,
         "capacity_throttle": stats.capacity_throttle,
+        "species": stats.species,
+        "species_born": stats.species_born,
+        "species_extinct": stats.species_extinct,
         "deaths": stats.deaths,
         "deaths_starvation": stats.deaths_starvation,
         "deaths_hazard": stats.deaths_hazard,
@@ -173,6 +204,7 @@ def _stats_payload(stats: TickStats | None) -> dict[str, Any] | None:
 class StepRequest(BaseModel):
     ticks: int = Field(default=1, ge=0, le=MAX_TICKS_PER_REQUEST)
     layer: str = "population"
+    species: int | None = Field(default=None, ge=0)
 
 
 class ResetRequest(BaseModel):
@@ -206,9 +238,21 @@ def create_app(
     def session() -> Session:
         return app.state.session
 
-    def state_or_404(layer: str) -> dict[str, Any]:
+    def require_species(species: int | None) -> None:
+        """Reject an unknown species id.
+
+        A 404 rather than an empty map: a caller asking about a species that never existed has
+        made a mistake, and an empty map looks like an answer.  Checked *before* a step runs, so
+        a rejected request does not quietly advance the world on its way to failing.
+        """
+
+        if species is not None and species not in session().simulation.history.records:
+            raise HTTPException(status_code=404, detail=f"no such species: {species}")
+
+    def state_or_404(layer: str, species: int | None = None) -> dict[str, Any]:
+        require_species(species)
         try:
-            return session().state(layer)
+            return session().state(layer, species)
         except KeyError:
             raise HTTPException(status_code=404, detail=f"no such layer: {layer}") from None
 
@@ -221,15 +265,29 @@ def create_app(
         return session().meta()
 
     @app.get("/api/state")
-    def state(layer: str = "population") -> dict[str, Any]:
-        return state_or_404(layer)
+    def state(layer: str = "population", species: int | None = None) -> dict[str, Any]:
+        return state_or_404(layer, species)
+
+    @app.get("/api/species")
+    def species_list() -> dict[str, Any]:
+        return session().species()
+
+    @app.get("/api/species/{species}")
+    def species_report(species: int) -> dict[str, Any]:
+        try:
+            return session().report(species)
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail=f"no such species: {species}"
+            ) from None
 
     @app.post("/api/step")
     def step(request: StepRequest) -> dict[str, Any]:
         current = session()
         with current.lock:
+            require_species(request.species)
             current.step(request.ticks)
-            return state_or_404(request.layer)
+            return state_or_404(request.layer, request.species)
 
     @app.post("/api/reset")
     def reset(request: ResetRequest) -> dict[str, Any]:

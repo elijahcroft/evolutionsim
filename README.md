@@ -14,19 +14,20 @@ history.
 
 ## Status
 
-**Milestone 5 of 8 — species and history.** The simulation now has a memory. Organisms age,
-move, feed, hunt, die, and breed; selection is real and measured; and a run records which
-species existed, which species each one came from, when each went extinct, and how their traits
-moved over time. A species is not a label applied from outside — it is the same genetic-distance
-threshold that already decides whether two organisms can breed, so the taxonomy and assortative
-mating cannot disagree.
+**Milestone 6 of 8 — the run you can read.** Organisms age, move, feed, hunt, die, and breed;
+selection is real and measured; a run records which species existed, which species each came
+from, when each went extinct, and how their traits moved; and you can now open a species in the
+browser and read its ancestry, its population curve, and — ranked by how far each trait moved
+relative to what its locus can do — what has changed in it since it appeared.
 
-Two things do not happen by themselves on the reference planet, both recorded rather than tuned
-away: no predatory lineage arises (hunting only pays once several traits are large at once), and
-**nothing speciates** — fully isolated lineages diverge to 0.03 against a compatibility
-threshold of 0.15, and no threshold value separates real divergence from drift. See
-[DEVLOG.md](DEVLOG.md) for exactly what is and is not implemented, and for the measurements
-behind that claim.
+Two things do not happen by themselves on the reference planet, both measured and recorded
+rather than tuned away. No predatory lineage arises: hunting only pays once several traits are
+large at once. And **nothing speciates** — two *completely isolated* lineages end up closer
+together than two organisms of the same population routinely are, under every lever tried
+(mutation rate, mutation size, and which loci the species concept looks at). The threshold was
+never the problem; the reference planet offers one way to make a living, so isolated lineages
+converge on the same organism. See [DEVLOG.md](DEVLOG.md) for the numbers and for exactly what
+is and is not implemented.
 
 ## Setup
 
@@ -47,6 +48,7 @@ python3 -m venv .venv
 .venv/bin/evosim --ticks 365 --out runs/year_one  # run; save world, population, and history
 .venv/bin/python tools/render_world.py --day 90 --out world-day-90.png
 .venv/bin/python tools/profile_tick.py             # time the biological tick at 40k organisms
+.venv/bin/python tools/speciation_experiment.py    # is a split divergence, or drift?
 ```
 
 A run written with `--out` leaves `history.json` beside the world and population dumps: every
@@ -65,6 +67,11 @@ from `(config, seed)`.
 Play, pause, or single-step the world; switch the map between population density, temperature,
 elevation, nutrients, detritus, moisture, insolation, and toxicity; read the tick's energy
 ledger and cause-of-death breakdown beside it. Space toggles play, `s` steps.
+
+Open a species from the species panel to see its ancestry, when it appeared and from what, its
+population over time, and — ranked by how far each trait moved relative to what its locus can
+do — **what has changed in it since it appeared**. Selecting a species also restricts the map to
+that species, which is how you see whether a split is geographic or only numerical.
 
 Time only advances when the browser asks for it — there is no background thread — so a session
 driven from the UI produces exactly the run `evosim --ticks N` produces from the same

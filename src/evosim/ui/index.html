@@ -52,7 +52,26 @@
   .row.sub span, .row.sub b { color: var(--dim); font-weight: 400; padding-left: 10px; }
   .row b { font-weight: 500; font-variant-numeric: tabular-nums; }
   .big { font-size: 26px; font-variant-numeric: tabular-nums; }
-  #chart { display: block; width: 100%; height: 130px; margin-top: 10px; }
+  #chart, #species-chart { display: block; width: 100%; height: 130px; margin-top: 10px; }
+  .species-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 190px; overflow-y: auto; }
+  .species-list li {
+    display: flex; justify-content: space-between; gap: 8px; cursor: pointer;
+    padding: 3px 6px; border: 1px solid transparent; border-radius: 3px;
+  }
+  .species-list li:hover { border-color: var(--line); }
+  .species-list li.on { border-color: var(--accent); color: var(--accent); }
+  .species-list li.gone { color: var(--dim); }
+  .species-list li b { font-weight: 500; font-variant-numeric: tabular-nums; }
+  .species-list .id::before { content: "#"; color: var(--dim); }
+  .detail { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .detail.hidden { display: none; }
+  .lineage { color: var(--dim); word-break: break-all; margin-bottom: 8px; }
+  .lineage b { color: var(--text); font-weight: 500; }
+  .drift { margin-top: 10px; }
+  .drift .head { color: var(--dim); margin-bottom: 4px; }
+  .drift .bar { position: relative; height: 3px; background: var(--line); border-radius: 2px; margin: 1px 0 4px; }
+  .drift .bar i { position: absolute; top: 0; height: 3px; border-radius: 2px; background: var(--accent); }
+  .drift .bar i.down { background: #6f8fbf; }
   footer {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 12px 18px; border-top: 1px solid var(--line);
@@ -107,6 +126,27 @@
         <div class="row sub"><span>predation</span><b id="s-pred">—</b></div>
         <div class="row"><span>throttled</span><b id="s-throttle">—</b></div>
         <canvas id="chart"></canvas>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Species</h2>
+      <div class="rows">
+        <div class="row"><span>living</span><b id="s-species">—</b></div>
+        <div class="row"><span>ever</span><b id="s-species-ever">—</b></div>
+        <ul class="species-list" id="species-list"></ul>
+        <div class="detail hidden" id="species-detail">
+          <div class="lineage" id="d-lineage">—</div>
+          <div class="row"><span>population</span><b id="d-pop">—</b></div>
+          <div class="row"><span>peak</span><b id="d-peak">—</b></div>
+          <div class="row"><span>origin</span><b id="d-origin">—</b></div>
+          <div class="row"><span>ended</span><b id="d-end">—</b></div>
+          <canvas id="species-chart"></canvas>
+          <div class="drift">
+            <div class="head">what has changed since it appeared</div>
+            <div id="d-drift"></div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -267,36 +307,104 @@ function drawMap(layer) {
   $("legend-max").textContent = sci(hi);
 }
 
-const chart = $("chart");
-const chartCtx = chart.getContext("2d");
-
-function drawChart(history) {
-  const width = chart.clientWidth, height = 130;
-  if (chart.width !== width * 2) { chart.width = width * 2; chart.height = height * 2; }
-  chartCtx.setTransform(2, 0, 0, 2, 0, 0);
-  chartCtx.clearRect(0, 0, width, height);
+// One population-over-time plot, drawn for the whole biosphere and for a single species from
+// the same `{day, population}` shape -- the per-species samples already come in that form.
+function drawChart(canvas, history) {
+  const ctx = canvas.getContext("2d");
+  const width = canvas.clientWidth, height = 130;
+  if (canvas.width !== width * 2) { canvas.width = width * 2; canvas.height = height * 2; }
+  ctx.setTransform(2, 0, 0, 2, 0, 0);
+  ctx.clearRect(0, 0, width, height);
   if (history.length < 2) return;
 
   const peak = Math.max(...history.map((h) => h.population), 1);
   const x = (i) => (i / (history.length - 1)) * width;
   const y = (v) => height - 4 - (v / peak) * (height - 12);
 
-  chartCtx.beginPath();
-  history.forEach((h, i) => i ? chartCtx.lineTo(x(i), y(h.population))
-                              : chartCtx.moveTo(x(i), y(h.population)));
-  chartCtx.strokeStyle = "#e0a33e";
-  chartCtx.lineWidth = 1.5;
-  chartCtx.stroke();
-  chartCtx.lineTo(width, height); chartCtx.lineTo(0, height); chartCtx.closePath();
-  chartCtx.fillStyle = "rgba(224,163,62,0.10)";
-  chartCtx.fill();
+  ctx.beginPath();
+  history.forEach((h, i) => i ? ctx.lineTo(x(i), y(h.population))
+                              : ctx.moveTo(x(i), y(h.population)));
+  ctx.strokeStyle = "#e0a33e";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.lineTo(width, height); ctx.lineTo(0, height); ctx.closePath();
+  ctx.fillStyle = "rgba(224,163,62,0.10)";
+  ctx.fill();
 
-  chartCtx.fillStyle = "#7c8896";
-  chartCtx.font = "10px ui-monospace, monospace";
-  chartCtx.fillText(`peak ${peak.toLocaleString()}`, 4, 12);
-  chartCtx.fillText(`day ${history[0].day}`, 4, height - 2);
+  ctx.fillStyle = "#7c8896";
+  ctx.font = "10px ui-monospace, monospace";
+  ctx.fillText(`peak ${peak.toLocaleString()}`, 4, 12);
+  ctx.fillText(`day ${history[0].day}`, 4, height - 2);
   const lastLabel = `day ${history[history.length - 1].day}`;
-  chartCtx.fillText(lastLabel, width - chartCtx.measureText(lastLabel).width - 2, height - 2);
+  ctx.fillText(lastLabel, width - ctx.measureText(lastLabel).width - 2, height - 2);
+}
+
+// --- species --------------------------------------------------------------------------
+let selected = null;      // species id whose detail is open, or null for the whole biosphere
+let speciesEver = 0;
+let detailPending = false;
+
+async function refreshSpecies() {
+  const payload = await api("/api/species");
+  speciesEver = payload.species.length;
+  $("s-species-ever").textContent = fmt(speciesEver);
+  const list = $("species-list");
+  list.innerHTML = payload.species.map((s) => `
+    <li data-id="${s.species_id}" class="${s.extinct ? "gone" : ""}${s.species_id === selected ? " on" : ""}">
+      <span class="id">${s.species_id}</span>
+      <b>${s.extinct ? `extinct day ${fmt(s.extinct_day)}` : fmt(s.population)}</b>
+    </li>`).join("");
+  list.querySelectorAll("li").forEach((row) => {
+    row.onclick = () => select(Number(row.dataset.id) === selected ? null : Number(row.dataset.id));
+  });
+}
+
+async function refreshDetail() {
+  if (selected === null || detailPending) return;
+  detailPending = true;
+  try {
+    const report = await api(`/api/species/${selected}`);
+    $("d-lineage").innerHTML = report.lineage
+      .map((id) => id === report.species_id ? `<b>#${id}</b>` : `#${id}`).join(" → ");
+    $("d-pop").textContent = fmt(report.population);
+    $("d-peak").textContent = `${fmt(report.peak_population)} on day ${fmt(report.peak_day)}`;
+    $("d-origin").textContent = report.parent === null
+      ? `day ${fmt(report.origin_day)} (founder)`
+      : `day ${fmt(report.origin_day)}, from #${report.parent}`;
+    $("d-end").textContent = report.extinct_day === null
+      ? "—" : `day ${fmt(report.extinct_day)} (confirmed ${fmt(report.confirmed_day)})`;
+    drawChart($("species-chart"), report.series);
+
+    // The drift table is the answer to "why did it become this": the traits that moved
+    // furthest, relative to what each locus can do, since the species appeared.
+    const top = report.drift.slice(0, 8);
+    const widest = Math.max(...top.map((d) => Math.abs(d.span_fraction)), 0);
+    // A species minutes old has moved nowhere, and eight rows of "+0" say that far less
+    // clearly than one sentence does.
+    $("d-drift").innerHTML = widest < 1e-6 ? `<div class="row"><span>nothing measurable yet</span></div>`
+      : top.map((d) => `
+      <div class="row"><span>${d.name}</span><b>${sci(d.now)} (${d.change >= 0 ? "+" : ""}${sci(d.change)})</b></div>
+      <div class="bar"><i class="${d.change < 0 ? "down" : ""}" style="
+        width:${(Math.abs(d.span_fraction) / widest * 50).toFixed(1)}%;
+        ${d.change < 0 ? "right" : "left"}:50%"></i></div>`).join("");
+    $("species-detail").classList.remove("hidden");
+  } finally {
+    detailPending = false;
+  }
+}
+
+async function select(id) {
+  selected = id;
+  $("species-detail").classList.toggle("hidden", id === null);
+  document.querySelectorAll("#species-list li").forEach((row) => {
+    row.classList.toggle("on", Number(row.dataset.id) === id);
+  });
+  try {
+    render(await api(`/api/state?layer=${layerName()}${id === null ? "" : `&species=${id}`}`));
+    await refreshDetail();
+  } catch (error) {
+    setStatus(error.message, "err");
+  }
 }
 
 function render(state) {
@@ -340,8 +448,9 @@ function render(state) {
       : "none");
   }
 
+  $("s-species").textContent = fmt(state.species);
   drawMap(state.layer);
-  drawChart(state.history);
+  drawChart($("chart"), state.history);
 
   if (state.extinct) {
     playing = false;
@@ -358,9 +467,22 @@ function setStatus(text, kind) {
 // --- control --------------------------------------------------------------------------
 const layerName = () => $("layer").value;
 
+// The species views are two extra requests, so while playing they are refreshed at a human
+// rate rather than at the tick rate; a paused UI always refreshes immediately.
+let lastSpeciesRefresh = 0;
+
+async function refreshSpeciesViews(force) {
+  const now = Date.now();
+  if (!force && now - lastSpeciesRefresh < 400) return;
+  lastSpeciesRefresh = now;
+  await refreshSpecies();
+  await refreshDetail();
+}
+
 async function stepOnce(ticks) {
-  const state = await post("/api/step", { ticks, layer: layerName() });
+  const state = await post("/api/step", { ticks, layer: layerName(), species: selected });
   render(state);
+  await refreshSpeciesViews(!playing);
 }
 
 async function loop() {
@@ -399,8 +521,8 @@ document.querySelectorAll(".speed").forEach((button) => {
 
 $("layer").onchange = async () => {
   if (playing) return;  // the next step will pick the new layer up on its own
-  const state = await api(`/api/state?layer=${encodeURIComponent(layerName())}`);
-  render(state);
+  const filter = selected === null ? "" : `&species=${selected}`;
+  render(await api(`/api/state?layer=${encodeURIComponent(layerName())}${filter}`));
 };
 
 $("reset").onclick = async () => {
@@ -416,7 +538,11 @@ $("reset").onclick = async () => {
     meta = await api("/api/meta");
     applyMeta();
     setStatus("");
+    // A reset is a different run, so the species selected in the old one no longer exists.
+    selected = null;
+    $("species-detail").classList.add("hidden");
     render(state);
+    await refreshSpeciesViews(true);
   } catch (error) {
     setStatus(error.message, "err");
   }
@@ -441,10 +567,14 @@ async function start() {
   $("layer").innerHTML = meta.layers
     .map((l) => `<option value="${l.name}">${l.label}</option>`).join("");
   render(await api(`/api/state?layer=${layerName()}`));
+  await refreshSpeciesViews(true);
 }
 
 start().catch((error) => setStatus(error.message, "err"));
-window.addEventListener("resize", () => { if (latest) drawChart(latest.history); });
+window.addEventListener("resize", () => {
+  if (latest) drawChart($("chart"), latest.history);
+  if (selected !== null) refreshDetail();
+});
 </script>
 </body>
 </html>

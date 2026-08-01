@@ -108,3 +108,98 @@ def test_index_is_served(client: TestClient) -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert "<title>evosim</title>" in response.text
+
+# -- species ---------------------------------------------------------------------------------
+
+
+def diverged_client(config: Config) -> TestClient:
+    """A session whose founders are already two kinds of organism, so a split happens."""
+    app = create_app(config)
+    population = app.state.session.simulation.population
+    schema = population.schema
+    for name in ("maturity_age", "repro_threshold", "offspring_count", "sex_bias"):
+        index = schema.index_of(name)
+        population.genomes[: population.size // 2, index, :] = schema.high[index]
+    population.phenotypes.update(0, population.genomes[: population.size], schema)
+    return TestClient(app)
+
+
+def test_species_lists_the_founder_before_anything_splits(client: TestClient) -> None:
+    payload = client.get("/api/species").json()
+    assert len(payload["trait_names"]) == 28
+    assert [entry["species_id"] for entry in payload["species"]] == [0]
+    assert payload["species"][0]["parent"] is None
+    assert payload["species"][0]["lineage"] == [0]
+
+
+def test_a_split_appears_in_the_species_list_and_the_state(config: Config) -> None:
+    client = diverged_client(
+        Config.load(DEFAULT_CONFIG_DIR, overrides=["sim.seed=11", "sim.taxonomy_interval=2"])
+    )
+    state = client.post("/api/step", json={"ticks": 2}).json()
+    assert state["species"] == 2
+    assert state["stats"]["species_born"] == 1
+    # Newest first: a run is read from its present backwards.
+    listing = client.get("/api/species").json()["species"]
+    assert [entry["species_id"] for entry in listing] == [1, 0]
+    assert listing[0]["lineage"] == [0, 1]
+
+
+def test_a_species_report_says_what_changed_since_it_appeared(client: TestClient) -> None:
+    client.post("/api/step", json={"ticks": 4})
+    report = client.get("/api/species/0").json()
+    assert report["species_id"] == 0
+    assert report["lineage"] == [0]
+    assert len(report["current_traits"]) == len(report["trait_names"]) == 28
+    assert len(report["drift"]) == 28
+    # Ranked by how far each trait moved relative to what its locus can do.
+    magnitudes = [abs(entry["span_fraction"]) for entry in report["drift"]]
+    assert magnitudes == sorted(magnitudes, reverse=True)
+    assert report["drift"][0]["now"] - report["drift"][0]["origin"] == pytest.approx(
+        report["drift"][0]["change"]
+    )
+
+
+def test_a_species_report_carries_its_sampled_time_series(config: Config) -> None:
+    client = TestClient(
+        create_app(
+            Config.load(DEFAULT_CONFIG_DIR, overrides=["sim.seed=11", "sim.sample_interval=2"])
+        )
+    )
+    client.post("/api/step", json={"ticks": 6})
+    series = client.get("/api/species/0").json()["series"]
+    assert [point["day"] for point in series] == [2, 4, 6]
+    assert all(point["population"] > 0 for point in series)
+
+
+def test_an_unknown_species_is_a_404(client: TestClient) -> None:
+    assert client.get("/api/species/7").status_code == 404
+
+
+def test_the_map_can_be_restricted_to_one_species(config: Config) -> None:
+    client = diverged_client(
+        Config.load(DEFAULT_CONFIG_DIR, overrides=["sim.seed=11", "sim.taxonomy_interval=2"])
+    )
+    client.post("/api/step", json={"ticks": 2})
+    whole = client.get("/api/state?layer=population").json()["layer"]
+    part = client.get("/api/state?layer=population&species=1").json()["layer"]
+    assert whole["species"] is None and part["species"] == 1
+    assert sum(part["values"]) < sum(whole["values"])
+    assert sum(part["values"]) > 0
+    # A filter is a filter, not a different world: the two must agree cell by cell.
+    assert all(a <= b for a, b in zip(part["values"], whole["values"]))
+
+
+def test_the_species_filter_only_touches_the_population_layer(client: TestClient) -> None:
+    plain = client.get("/api/state?layer=temperature_c").json()["layer"]
+    filtered = client.get("/api/state?layer=temperature_c&species=0").json()["layer"]
+    assert filtered["species"] is None
+    assert filtered["values"] == plain["values"]
+
+
+def test_filtering_by_a_species_that_never_existed_is_a_404(client: TestClient) -> None:
+    """An empty map looks like an answer, so a mistaken id must not get one."""
+    assert client.get("/api/state?layer=population&species=3").status_code == 404
+    assert client.post("/api/step", json={"ticks": 1, "species": 3}).status_code == 404
+    # ...and the rejected step did not advance the world on its way to failing.
+    assert client.get("/api/state").json()["day"] == 0

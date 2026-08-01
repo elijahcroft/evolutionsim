@@ -5,6 +5,100 @@ and what the next task is.
 
 ---
 
+## Milestone 6 — the run you can read
+
+**Status: complete.** 393 tests passing.
+
+### Completed
+
+- **A species can be opened.** `/api/species` lists every species a run has produced, newest
+  first; `/api/species/{id}` returns one in full — its ancestry, its children, its sampled
+  population and trait time series, and its **drift**: every trait's current mean against its
+  value at the species' origin, ranked by how far it moved *relative to what that locus can do*.
+  The ranking is the point. A species' 28 trait means say what it is; the ordered list of what
+  changed since it appeared is the beginning of why, and 28 unordered numbers are not an
+  explanation.
+
+- **The UI panel that reads it.** The species list is selectable; selecting one shows the
+  lineage chain (`#0 → #3 → #7`), origin and extinction days, peak population and when, its own
+  population curve drawn from the M5 samples, and the drift table with a signed bar per trait.
+  A species minutes old says "nothing measurable yet" rather than printing eight rows of `+0`.
+
+- **Selecting a species restricts the map to it.** `?species=N` on the population layer turns
+  density into a range map, which is how you see whether a split is geographic or only
+  numerical. The filter applies to the layer that counts organisms and is reported as unset on
+  every other layer rather than being silently accepted and ignored, and an unknown species id
+  is a 404 — an empty map looks like an answer. A rejected step is rejected *before* it runs, so
+  a failing request never advances the world on its way out.
+
+- **`tools/speciation_experiment.py` — the M5 question, answered.** M5 recorded that nothing
+  speciates and left three candidate explanations. The tool runs two *completely isolated*
+  lineages per variant (independent runs from the same founder, one on a colder planet, so the
+  pair gets allopatry and divergent selection together) and compares the gap between them with
+  the spread inside one of them, in the units the mating threshold uses.
+
+### The finding: reproductive isolation is not reachable in this model, and the threshold is not why
+
+3,000 days per lineage, five variants:
+
+| variant | between lineages | within, mean | within, p99 | S/N | separable? |
+| --- | --- | --- | --- | --- | --- |
+| reference | 0.032 | 0.020 | 0.034 | 1.62 | no |
+| mutation ×10 | 0.043 | 0.019 | 0.045 | 2.23 | no |
+| mutation ×50 | 0.065 | 0.049 | 0.101 | 1.34 | no |
+| wide thermal sigma | 0.031 | 0.020 | 0.050 | 1.51 | no |
+| species concept over 3 loci | 0.045 | 0.022 | 0.072 | 2.05 | no |
+
+- **The gap is real but small.** Two organisms from different isolated lineages are 1.3–2.2×
+  further apart than two from the same one, so isolation does leave a signature. M5's rougher
+  reading — that no gap existed at all — compared the between-lineage distance against the
+  within-lineage *maximum*; against the mean there is a signal. That correction matters, and it
+  does not change the conclusion.
+- **No threshold value can use it.** In *every* variant the between-lineage gap falls below the
+  99th percentile of within-lineage distance. Any threshold low enough to call two isolated
+  lineages separate species would also cut an ordinary undivided population in two. This is the
+  decisive number, and it is why `mate_compatibility_distance` was never the problem.
+- **None of the three candidate explanations survives.** More mutation raises the noise as fast
+  as the signal (×50 has the *worst* S/N of the five). A locus with a wide sigma does not carry
+  the distance. Concentrating the species concept on the three loci selection actually acts on
+  helps most — S/N 2.05 — and still is not separable.
+- **What that leaves is the planet.** Both lineages are under *stabilising* selection toward
+  optima that a single reference planet makes nearly identical, so their means barely part while
+  variance around each mean keeps accumulating. Speciation needs two ways of making a living to
+  exist in the first place. That is a world-model question, not a tuning question, and it is
+  Milestone 7.
+
+### Consequences and known limitations
+
+- **Every species in the UI screenshots is still an imposed one.** The panel is verified against
+  a session whose founders were seeded already divergent; no run has produced a species by
+  itself, and this milestone explains why rather than fixing it.
+- **The species views cost two extra requests per refresh.** While playing they refresh at a
+  human rate (400 ms) rather than per tick, so a fast run's species panel lags its map slightly.
+- **`drift` compares against the species' origin, not against its parent.** "What changed since
+  this species appeared" is not the same question as "what makes it different from its sister",
+  and the second one is the more interesting comparison once real splits exist.
+- **The experiment's variants are not a sweep.** Five hand-chosen points, one seed pair each,
+  3,000 days. It is enough to rule the three candidate explanations out and not enough to map
+  the space.
+- Every M1–M5 limitation still stands.
+
+### Next task — Milestone 7: more than one way to make a living
+
+The measurement above says the reference planet offers a single optimum, so isolated lineages
+converge on the same organism and nothing can tell them apart. Give the world a second axis that
+makes a genuinely different living possible — the parked ocean-depth decision is the obvious
+candidate, because light attenuating with depth makes autotrophy physically impossible below a
+certain point and *forces* detritivory and predation, which is an environmental pressure rather
+than an authored rule. The land/water divide is the other.
+
+Verified by: `tools/speciation_experiment.py` reports `separable: yes` for two lineages settled
+on opposite sides of that axis — the between-lineage gap clearing the within-lineage p99 — and
+then, the thing this project exists for, a run that produces a second species without being told
+to.
+
+---
+
 ## Milestone 5 — species and history
 
 **Status: complete.** 378 tests passing.

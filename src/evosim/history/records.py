@@ -291,6 +291,88 @@ class History:
             parent = self.records[parent].parent
         return tuple(reversed(chain))
 
+    def summary(self, population: Population) -> list[dict[str, Any]]:
+        """Every species that has ever existed, newest first, with its lineage attached.
+
+        Newest first because a run is usually read from its present backwards: the thing you
+        want to open is the species that just appeared, not the founder you already know about.
+        """
+
+        return [
+            {
+                **self.records[species].to_dict(),
+                "lineage": list(self.lineage(species)),
+                "extinct": self.records[species].extinct,
+            }
+            for species in sorted(self.records, reverse=True)
+        ]
+
+    def report(self, species: int, population: Population) -> dict[str, Any]:
+        """One species in full: its ancestry, its time series, and what has changed in it.
+
+        ``drift`` is the point of the whole layer.  A trait mean on its own says what a species
+        is; the *difference* from what it was at its origin, ranked by how far it moved relative
+        to what that locus can do, is the beginning of an answer to why it became that.  It is
+        ranked rather than merely listed because 28 unordered numbers are not an explanation.
+        """
+
+        if species not in self.records:
+            raise KeyError(f"no such species: {species}")
+        record = self.records[species]
+        rows = np.flatnonzero(
+            population.species_id[population.active].astype(np.int64) == species
+        )
+        current = trait_means(population, rows) if rows.size else None
+        series = [
+            {
+                "day": sample.day,
+                **entry.to_dict(),
+            }
+            for sample in self.samples
+            for entry in sample.species
+            if entry.species_id == species
+        ]
+
+        span = population.schema.span.astype(np.float64)
+        reference = current if current is not None else (
+            tuple(series[-1]["traits"]) if series else None
+        )
+        drift: list[dict[str, Any]] = []
+        if reference is not None:
+            drift = sorted(
+                (
+                    {
+                        "name": name,
+                        "origin": origin,
+                        "now": now,
+                        "change": now - origin,
+                        # Divided by the locus span so loci measured in degrees and loci
+                        # measured in offspring can be ranked against each other at all.
+                        "span_fraction": (now - origin) / float(span[index])
+                        if span[index] > 0.0
+                        else 0.0,
+                    }
+                    for index, (name, origin, now) in enumerate(
+                        zip(self.trait_names, record.origin_traits, reference)
+                    )
+                ),
+                key=lambda entry: abs(entry["span_fraction"]),
+                reverse=True,
+            )
+
+        return {
+            **record.to_dict(),
+            "extinct": record.extinct,
+            "lineage": list(self.lineage(species)),
+            "children": sorted(
+                other for other, entry in self.records.items() if entry.parent == species
+            ),
+            "trait_names": list(self.trait_names),
+            "current_traits": list(current) if current is not None else None,
+            "series": series,
+            "drift": drift,
+        }
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize the whole record for a run dump or an API."""
 
