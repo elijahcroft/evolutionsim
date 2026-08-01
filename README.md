@@ -97,6 +97,14 @@ population over time, and — ranked by how far each trait moved relative to wha
 do — **what has changed in it since it appeared**. Selecting a species also restricts the map to
 that species, which is how you see whether a split is geographic or only numerical.
 
+**Click a cell on the map to open one organism.** You get its own body drawn from its own genome,
+its age against maturity and its reserve against the level it would breed at, what it earned and
+what it spent today itemised the way the whole-population ledger is, its chance of dying today by
+cause, and a sentence saying which of those numbers is deciding its life — *"it spends 4.62e-3
+more than it earns each day, so its reserve is gone in about 5 days; the largest cost is basal"*.
+Nothing is recorded for that panel: the server re-runs the tick's own equations for that one
+organism, in the world as it stands, and writes none of it back.
+
 Time only advances when the browser asks for it — there is no background thread — so a session
 driven from the UI produces exactly the run `evosim --ticks N` produces from the same
 `(config, seed)`. A test asserts that.

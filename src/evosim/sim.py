@@ -37,7 +37,7 @@ checked rather than trusted.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 import numpy as np
 from numpy.typing import NDArray
@@ -55,6 +55,7 @@ from evosim.life.energy import (
 )
 from evosim.life.mortality import MortalityModel, starved
 from evosim.life.movement import MovementModel
+from evosim.life.phenotype import MORPHOLOGY_NAMES
 from evosim.life.population import Population
 from evosim.life.predation import HuntStats, PredationModel
 from evosim.life.reproduction import BirthStats, ReproductionModel
@@ -264,6 +265,144 @@ class Simulation:
         self.last_stats = stats
         return stats
 
+    # -- inspection ----------------------------------------------------------------------
+
+    def inspect(self, organism_id: int) -> dict[str, Any]:
+        """One organism's ledger, as it stands in the world right now.
+
+        A pure read.  Nothing is stored during the tick for this method's benefit and nothing
+        it computes is written back: it re-evaluates the same equations :meth:`step` runs, at
+        the cell the organism is standing in, on the world as it is at this moment.  So the
+        numbers are what the organism *would* earn and pay were the day repeated -- not a
+        replay of the day just past, in which it may have been standing somewhere else.
+
+        The evaluation is population-wide because two of the numbers are not properties of one
+        organism: the share of a cell's pool it may draw depends on everyone else drawing from
+        the same pool, and what it stands to gain or lose to predation depends on who else is
+        in the cell.  One vectorised pass, on the cold path, once per request.
+        """
+
+        population = self.population
+        active = population.active
+        row = np.flatnonzero(population.organism_id[active] == int(organism_id))
+        if row.size == 0:
+            raise KeyError(f"no living organism with id {organism_id}")
+        index = int(row[0])
+
+        environment = Environment.sample(self.world, population.cell[active])
+        phenotype = population.phenotypes.active
+        drag = self.energy.medium_drag(environment.on_land)
+        basal = self.energy.basal_cost(
+            phenotype.mass.astype(np.float64),
+            phenotype.trait("metabolic_rate").astype(np.float64),
+            self.energy.upkeep_multiplier(phenotype),
+            phenotype.trait("temp_optimum").astype(np.float64),
+        )
+        speed = self.movement.realized_speed(
+            population, self.energy, drag, basal, environment.on_land
+        )
+        costs = self.energy.costs_for(phenotype, environment, speed, drag)
+        intake = self._contended_intake(environment, basal)
+        hazards = self.mortality.hazards(phenotype, environment, population.age[active])
+
+        cells = population.cell[active].astype(np.intp)
+        census = CellCensus.build(
+            population,
+            self.config.energy.energy_density,
+            self.config.energy.intake.k_encounter,
+        )
+        here = cells[index : index + 1]
+        one = population.phenotypes.select(np.array([index], dtype=np.intp))
+        # The movement layer prices predation for five candidate cells at once, so these take a
+        # trailing candidate axis; here there is one candidate -- the cell it is already in.
+        gain = float(
+            self.predation.expected_gain(
+                one,
+                census.occupancy[here][:, None],
+                census.mass[here][:, None],
+                census.speed[here][:, None],
+                census.autotroph[here][:, None],
+                census.carcass_value[here][:, None],
+            )[0, 0]
+        )
+        risk = float(
+            self.predation.expected_risk(
+                one,
+                census.threat[here][:, None],
+                census.occupancy[here][:, None],
+                census.hunter_mass[here][:, None],
+                census.speed[here][:, None],
+                census.hunter_sense[here][:, None],
+                census.hunter_aggression[here][:, None],
+            )[0, 0]
+        )
+
+        organism = population.organism_dict(index)
+        traits = organism["phenotype"]["traits"]
+        body = organism["phenotype"]["body"]
+        reserve = organism["energy"]
+        capacity = body["storage_capacity"]
+        width = self.world.grid.width
+        cell = organism["cell"]
+        return {
+            **organism,
+            "day": self.world.day,
+            "column": cell % width,
+            "row": cell // width,
+            "neighbours": int(census.occupancy[cell]),
+            "morphology": {
+                "genes": {name: traits[name] for name in MORPHOLOGY_NAMES},
+                "diet": organism["phenotype"]["diet"],
+                "mass": body["mass"],
+                "volume": body["volume"],
+                "surface_area": body["surface_area"],
+            },
+            "environment": {
+                "temperature_c": float(environment.temperature_c[index]),
+                "light": float(environment.light[index]),
+                "depth_km": float(environment.depth_km[index]),
+                "moisture": float(environment.moisture[index]),
+                "nutrients": float(environment.nutrients[index]),
+                "detritus": float(environment.detritus[index]),
+                "toxicity": float(environment.toxicity[index]),
+                "on_land": bool(environment.on_land[index]),
+            },
+            "intake": {
+                "autotrophy": float(intake.autotrophy[index]),
+                "detritivory": float(intake.detritivory[index]),
+                "predation": gain,
+                "total": float(intake.total[index]) + gain,
+            },
+            "costs": {
+                "basal": float(costs.basal[index]),
+                "support": float(costs.support[index]),
+                "locomotion": float(costs.locomotion[index]),
+                "sensory": float(costs.sensory[index]),
+                "thermoregulation": float(costs.thermoregulation[index]),
+                "armor": float(costs.armor[index]),
+                "total": float(costs.total[index]),
+            },
+            "net_energy": float(intake.total[index]) + gain - float(costs.total[index]),
+            "predation_risk": risk,
+            "speed": float(speed[index]),
+            "hazards": {
+                "background": float(hazards.background[index]),
+                "thermal": float(hazards.thermal[index]),
+                "radiation": float(hazards.radiation[index]),
+                "toxicity": float(hazards.toxicity[index]),
+                "pressure": float(hazards.pressure[index]),
+                "senescence": float(hazards.senescence[index]),
+                "combined": float(hazards.combined[index]),
+            },
+            "thresholds": {
+                "storage_capacity": capacity,
+                "maturity_age": traits["maturity_age"],
+                "repro_energy": traits["repro_threshold"] * capacity,
+                "mature": organism["age"] >= traits["maturity_age"],
+                "fullness": reserve / capacity if capacity > 0.0 else 0.0,
+            },
+        }
+
     # -- tick stages ---------------------------------------------------------------------
 
     def _feed(self, environment: Environment, basal: FloatArray) -> Intake:
@@ -274,29 +413,9 @@ class Simulation:
         """
 
         population = self.population
-        active = population.active
-        cells = population.cell[active].astype(np.intp)
+        cells = population.cell[population.active].astype(np.intp)
         n_cells = self.world.grid.n_cells
-        raw = self.energy.intake_for(population.phenotypes.active, environment, basal)
-
-        nutrient_share = apply_resource_contention(
-            raw.nutrient_draw,
-            cells,
-            self.world.resources.nutrients.reshape(-1),
-            n_cells,
-        )
-        detritus_share = apply_resource_contention(
-            raw.detritus_draw,
-            cells,
-            self.world.resources.detritus.reshape(-1),
-            n_cells,
-        )
-        intake = Intake(
-            autotrophy=raw.autotrophy * nutrient_share,
-            detritivory=raw.detritivory * detritus_share,
-            nutrient_draw=raw.nutrient_draw * nutrient_share,
-            detritus_draw=raw.detritus_draw * detritus_share,
-        )
+        intake = self._contended_intake(environment, basal)
 
         shape = self.world.grid.shape
         self.world.resources.nutrients -= np.bincount(
@@ -315,6 +434,39 @@ class Simulation:
             self.world.resources.detritus, 0.0, None, out=self.world.resources.detritus
         )
         return intake
+
+    def _contended_intake(
+        self, environment: Environment, basal: FloatArray
+    ) -> Intake:
+        """What each organism may actually assimilate, after the cell pools are shared out.
+
+        Separate from :meth:`_feed` because the inspector needs the same answer without the
+        world being drawn down for it.
+        """
+
+        population = self.population
+        cells = population.cell[population.active].astype(np.intp)
+        n_cells = self.world.grid.n_cells
+        raw = self.energy.intake_for(population.phenotypes.active, environment, basal)
+
+        nutrient_share = apply_resource_contention(
+            raw.nutrient_draw,
+            cells,
+            self.world.resources.nutrients.reshape(-1),
+            n_cells,
+        )
+        detritus_share = apply_resource_contention(
+            raw.detritus_draw,
+            cells,
+            self.world.resources.detritus.reshape(-1),
+            n_cells,
+        )
+        return Intake(
+            autotrophy=raw.autotrophy * nutrient_share,
+            detritivory=raw.detritivory * detritus_share,
+            nutrient_draw=raw.nutrient_draw * nutrient_share,
+            detritus_draw=raw.detritus_draw * detritus_share,
+        )
 
     def _reap(
         self,

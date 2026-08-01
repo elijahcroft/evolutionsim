@@ -5,6 +5,92 @@ and what the next task is.
 
 ---
 
+## Milestone 10 — the organism inspector
+
+**Status: complete.** 427 tests passing. Click a cell on the map and you open one animal: its own
+body, its own ledger itemised the way the tick ledger itemises the population, the chance it dies
+today broken down by cause, and a sentence saying which of those numbers is killing it.
+
+### The constraint, and what it cost
+
+The milestone was specified as a *read*: no new state, no new arrays, nothing recorded during the
+tick for the inspector's benefit. That was kept, and it is the reason the whole thing is one
+method. `Simulation.inspect` re-evaluates the same equations `step` runs — `costs_for`,
+`intake_for`, `MortalityModel.hazards`, `PredationModel.expected_gain`/`expected_risk` — against
+the world as it stands now.
+
+Two of the numbers are not properties of one organism, and that decided the implementation:
+
+- **The share of a cell's pool it may draw depends on everyone else drawing from the same pool.**
+  So the evaluation is population-wide and the organism's row is taken out of it. `_feed` was split
+  into `_contended_intake` (pure) plus the world drawdown, so the inspector and the tick get the
+  same answer from the same code rather than from two implementations that could disagree.
+- **What it stands to gain or lose to predation depends on who else is in the cell.** `CellCensus`
+  and the two expectation functions already exist for exactly this, evaluated per organism per
+  tick by the movement layer; the inspector calls them for the one cell the organism is in.
+
+The cost is one tick's worth of arithmetic per request, on the cold path, once per click. The tick
+itself is untouched: 22.6 ms/tick at 40,000 organisms, 1.27 M organisms/s, unchanged from M8.
+
+**What the panel does not show is predation *income*.** A kill is a drawn event, not a computable
+one, so the row is the *expected* gain against this cell's occupants — the same number movement
+scores cells on. Showing the day's actual kill would have required recording it, which is the one
+thing the milestone said not to do.
+
+### Completed
+
+- **`src/evosim/sim.py`** — `Simulation.inspect(organism_id)`, and `_feed` split so contention is
+  computable without consuming the world.
+- **`src/evosim/server/app.py`** — `GET /api/organism/{id}` and `GET /api/cell/{cell}`. Ids are
+  never reused, so a 404 from the first means exactly one thing: it died, and the UI says so.
+- **`src/evosim/ui/index.html`** — an organism panel. The creature viewer became a factory
+  (`makeCreatureView`) instead of a singleton, so the individual gets its own animal beside the
+  species' average one, from the same 120 lines of WebGL2. A reserve meter marks storage capacity
+  and the breeding threshold, because "how close is it" is the question the number is read for.
+- **A visual pass over the whole interface**, at ej's request, once the fourth panel made the page
+  long enough for the old styling to strain. Still one file, still no build step, still no
+  framework: what changed is a token set (colour, radius, spacing, type scale) that everything
+  else derives from. `--dim` went from 4.2:1 to 6.1:1 against the panel; breakdowns hang off a
+  rule under the total they belong to rather than floating at an indent; section heads and the
+  verdict callout give the panel a hierarchy at a glance; the map sticks to the top of its column
+  while the right-hand column scrolls; above 1560 px the cards flow into two balanced columns
+  instead of one very tall one; the chart reads its colours from the stylesheet rather than
+  carrying its own copies; and every control has a `:focus-visible` ring.
+
+### The acceptance criterion
+
+*Explain a starving organism's death from its own panel alone.* On a planet with `k_photo` and
+`k_detritus` at zero, the panel says:
+
+> **Running down.** It spends 4.62e-3 more than it earns each day, so its reserve of 0.02 is gone
+> in about 5 days. The largest cost is basal (84.2%). It is earning next to nothing — 1.75e-6
+> against a bill of 4.62e-3. Even fed, its hazards this day come to 1.1% — about 88 days of life
+> on average.
+
+Every number in that sentence is a row above it. The sentence names the largest ones; it does not
+introduce any. On the reference planet the same panel reads *"Gaining… at 8.08e-4 a day it reaches
+its breeding reserve in about 26 days"*, which is the same explanation with the sign flipped.
+
+### Known limitations
+
+- **The ledger is what today *would* cost, not what yesterday *did*.** The organism may have been
+  standing somewhere else when the tick charged it. Stated in the method's docstring rather than
+  hidden, and it is the honest consequence of refusing to record anything.
+- **A click picks the first organism in the cell**, not the one nearest the click within it, and a
+  cell with no one in it says so rather than searching outward. `/api/cell` lists up to 50
+  occupants with a true count, so a "next occupant" control is a UI change and nothing more.
+- **The panel is not selectable from the species list** — the only way in is the map. Fine while
+  the map is how you navigate; M11's habitat work is where that gets revisited.
+
+### Next task — Milestone 11: where they live
+
+Biomes derived from fields that already exist, per-species habitat occupancy sampled at the
+existing `SpeciesSample` cadence, and a habitat line written from the numbers. The organism
+inspector is what makes it navigable: a range map answers *where*, and one click now answers
+*what is it like to be there*.
+
+---
+
 ## Milestone 8 — the morphology genome, and something to look at
 
 **Status: complete.** 418 tests passing. **`mass = body_size ** 3` is gone.** An organism now has

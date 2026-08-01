@@ -47,6 +47,9 @@ HISTORY_LENGTH = 1200
 #: Upper bound on ticks per request, so one call cannot hang the server for minutes.
 MAX_TICKS_PER_REQUEST = 1000
 
+#: How many of a cell's occupants ``/api/cell/{cell}`` names, out of however many are there.
+OCCUPANTS_LISTED = 50
+
 
 @dataclass(slots=True)
 class Session:
@@ -108,6 +111,33 @@ class Session:
             "day": simulation.world.day,
             "trait_names": list(simulation.population.phenotypes.trait_names),
             "species": simulation.history.summary(simulation.population),
+        }
+
+    def organism(self, organism_id: int) -> dict[str, Any]:
+        """One individual's ledger, as the simulation would evaluate it today."""
+
+        return self.simulation.inspect(organism_id)
+
+    def occupants(self, cell: int) -> dict[str, Any]:
+        """Who is standing in one cell, for turning a map click into a selection."""
+
+        grid = self.simulation.world.grid
+        if cell < 0 or cell >= grid.n_cells:
+            raise KeyError(cell)
+        population = self.simulation.population
+        active = population.active
+        rows = np.flatnonzero(population.cell[active].astype(np.int64) == cell)
+        return {
+            "cell": cell,
+            "column": cell % grid.width,
+            "row": cell // grid.width,
+            "count": int(rows.size),
+            # A crowded cell holds thousands; the panel shows one at a time, so the list is
+            # capped and ``count`` carries the truth about how many are really there.
+            "ids": [
+                int(value)
+                for value in population.organism_id[active][rows[:OCCUPANTS_LISTED]]
+            ],
         }
 
     def report(self, species: int) -> dict[str, Any]:
@@ -285,6 +315,24 @@ def create_app(
             raise HTTPException(
                 status_code=404, detail=f"no such species: {species}"
             ) from None
+
+    @app.get("/api/organism/{organism_id}")
+    def organism(organism_id: int) -> dict[str, Any]:
+        try:
+            return session().organism(organism_id)
+        except KeyError:
+            # An organism id is never reused, so "gone" and "never existed" are the same
+            # answer to a caller holding a stale selection: this one is not alive now.
+            raise HTTPException(
+                status_code=404, detail=f"no living organism with id {organism_id}"
+            ) from None
+
+    @app.get("/api/cell/{cell}")
+    def cell_occupants(cell: int) -> dict[str, Any]:
+        try:
+            return session().occupants(cell)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"no such cell: {cell}") from None
 
     @app.post("/api/step")
     def step(request: StepRequest) -> dict[str, Any]:

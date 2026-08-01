@@ -5,97 +5,282 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>evosim</title>
 <style>
+  /* One dark theme, one type scale, one spacing step. Everything below is built out of the
+     tokens here so that a colour or a rhythm changes in exactly one place. The interface is
+     monospaced on purpose: nearly every value on screen is a number being compared against
+     another number directly above or below it, and a proportional face breaks that column. */
   :root {
-    --bg: #0b0d10;
-    --panel: #14181d;
-    --line: #232a32;
-    --text: #d7dee6;
-    --dim: #7c8896;
-    --accent: #e0a33e;
-    --good: #62b47a;
-    --bad: #c9605f;
+    color-scheme: dark;
+    --bg: #090b0e;
+    --panel: #12161b;
+    --raised: #171d24;          /* areas lifted off a panel: charts, meters, the viewport */
+    --line: #242d38;
+    --line-soft: #1a212a;
+    --text: #dfe6ef;
+    --dim: #93a1b2;             /* 6.1:1 on --panel; readable, still clearly secondary */
+    --dimmer: #6e7d8e;
+    --accent: #e8b256;
+    --accent-soft: rgba(232, 178, 86, .13);
+    --good: #6cc48a;
+    --bad: #dc7476;
+    --cool: #7ba0d8;
+    --radius: 8px;
+    --radius-sm: 4px;
+    --pad: 14px;
+    --gap: 16px;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
+  html { scrollbar-color: var(--line) transparent; }
   body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font: 13px/1.5 ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font: 13px/1.55 var(--mono);
+    -webkit-font-smoothing: antialiased;
   }
+  ::selection { background: var(--accent-soft); }
+  /* Scrollbars inside panels are UI, not chrome: thin, and only as visible as they need to be. */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #33404e; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  /* -- header ------------------------------------------------------------------------- */
   header {
-    display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
-    padding: 12px 18px; border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: baseline; gap: 8px 22px; flex-wrap: wrap;
+    padding: 13px 20px;
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
   }
-  header h1 { margin: 0; font-size: 15px; letter-spacing: .14em; text-transform: uppercase; }
-  header .meta { color: var(--dim); }
-  header .meta b { color: var(--text); font-weight: 500; }
+  header h1 {
+    margin: 0 4px 0 0; font-size: 14px; font-weight: 600;
+    letter-spacing: .22em; text-transform: uppercase; color: var(--text);
+  }
+  header .meta { color: var(--dimmer); font-size: 12px; letter-spacing: .02em; }
+  header .meta b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  header .meta#m-day-wrap b { color: var(--accent); }
+
+  /* -- layout ------------------------------------------------------------------------- */
   main {
-    display: grid; grid-template-columns: minmax(0, 1fr) 320px;
-    align-items: start; gap: 18px; padding: 18px;
+    display: grid; grid-template-columns: minmax(0, 1fr) 350px;
+    align-items: start; gap: var(--gap); padding: var(--gap) 20px 24px;
   }
-  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
+  /* The map is the thing you are watching; on a tall enough window it stays put while the
+     long right-hand column scrolls past it. */
+  @media (min-width: 1000px) and (min-height: 780px) {
+    .map-panel { position: sticky; top: 74px; }
+  }
+  .side { display: flex; flex-direction: column; gap: var(--gap); }
+  /* Wide windows get two columns of cards instead of one very tall one. Multi-column rather
+     than a grid because the cards are of wildly different heights and this balances them. */
+  @media (min-width: 1560px) {
+    main { grid-template-columns: minmax(0, 1fr) 720px; }
+    .side { display: block; columns: 2; column-gap: var(--gap); }
+    .side > .panel { margin-bottom: var(--gap); break-inside: avoid; }
+  }
+  @media (max-width: 900px) {
+    main { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+  }
+
+  /* -- panels ------------------------------------------------------------------------- */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
   .panel h2 {
-    margin: 0; padding: 9px 12px; font-size: 11px; letter-spacing: .12em;
-    text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+    margin: 0; padding: 10px var(--pad);
+    font-size: 10.5px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--dim);
+    background: linear-gradient(var(--raised), var(--panel));
+    border-bottom: 1px solid var(--line);
   }
-  #map { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+  .panel h2 .aside { font-size: 10.5px; letter-spacing: .04em; color: var(--dimmer);
+                     text-transform: none; font-weight: 400; }
+
+  /* -- the map ------------------------------------------------------------------------ */
+  #map {
+    display: block; width: 100%; height: auto;
+    image-rendering: pixelated; cursor: crosshair;
+    background: #05070a;
+  }
   .legend {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px var(--pad); border-top: 1px solid var(--line);
+    color: var(--dimmer); font-size: 11px; font-variant-numeric: tabular-nums;
+  }
+  .legend .ramp {
+    flex: 1; height: 8px; border-radius: 4px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06);
+  }
+
+  /* -- rows --------------------------------------------------------------------------- */
+  .rows { padding: 10px var(--pad) var(--pad); }
+  .row {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
+    padding: 2.5px 0;
+  }
+  /* The label never wraps; a long value gives up its own line instead, which keeps the two
+     columns readable as columns. */
+  .row span { color: var(--dim); white-space: nowrap; }
+  .row b { font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
+  /* A breakdown is tied to the total above it by a rule, not by indentation alone: it reads
+     as "these are its parts" rather than as four unrelated smaller numbers. */
+  .row.sub {
+    margin-left: 2px; padding-left: 10px;
+    border-left: 1px solid var(--line-soft);
+    font-size: 12px;
+  }
+  .row.sub span, .row.sub b { color: var(--dimmer); font-weight: 400; }
+  .big {
+    font-size: 30px; line-height: 1.15; font-weight: 500; letter-spacing: -.01em;
+    font-variant-numeric: tabular-nums; margin: 2px 0 0;
+  }
+  .metric-label {
+    color: var(--dimmer); font-size: 10px; letter-spacing: .14em;
+    text-transform: uppercase; margin: 3px 0 12px;
+  }
+  .head {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 12px; border-top: 1px solid var(--line); color: var(--dim);
+    margin: 16px 0 6px;
+    font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--dimmer);
   }
-  .legend .ramp { flex: 1; height: 8px; border-radius: 2px; }
-  .side { display: flex; flex-direction: column; gap: 18px; }
-  .rows { padding: 6px 12px 12px; }
-  .row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
-  .row span { color: var(--dim); }
-  .row.sub span, .row.sub b { color: var(--dim); font-weight: 400; padding-left: 10px; }
-  .row b { font-weight: 500; font-variant-numeric: tabular-nums; }
-  .big { font-size: 26px; font-variant-numeric: tabular-nums; }
-  #chart, #species-chart { display: block; width: 100%; height: 130px; margin-top: 10px; }
-  .species-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 190px; overflow-y: auto; }
+  .head::after {
+    content: ""; flex: 1; height: 1px; background: var(--line-soft);
+  }
+  #chart, #species-chart {
+    display: block; width: 100%; height: 130px; margin-top: 12px;
+    background: var(--raised); border-radius: var(--radius-sm);
+  }
+
+  /* -- the species list --------------------------------------------------------------- */
+  .species-list {
+    list-style: none; margin: 10px 0 0; padding: 0;
+    max-height: 208px; overflow-y: auto;
+    border-top: 1px solid var(--line-soft);
+  }
   .species-list li {
-    display: flex; justify-content: space-between; gap: 8px; cursor: pointer;
-    padding: 3px 6px; border: 1px solid transparent; border-radius: 3px;
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+    cursor: pointer; padding: 5px 8px 5px 9px;
+    border-left: 2px solid transparent;
+    border-bottom: 1px solid var(--line-soft);
   }
-  .species-list li:hover { border-color: var(--line); }
-  .species-list li.on { border-color: var(--accent); color: var(--accent); }
-  .species-list li.gone { color: var(--dim); }
+  .species-list li:last-child { border-bottom: 0; }
+  .species-list li:hover { background: var(--raised); }
+  .species-list li.on {
+    border-left-color: var(--accent); background: var(--accent-soft); color: var(--accent);
+  }
+  .species-list li.gone { color: var(--dimmer); }
   .species-list li b { font-weight: 500; font-variant-numeric: tabular-nums; }
-  .species-list .id::before { content: "#"; color: var(--dim); }
-  .detail { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .species-list .id::before { content: "#"; color: var(--dimmer); }
+  .species-list li.on .id::before { color: inherit; }
+
+  /* -- detail blocks ------------------------------------------------------------------ */
+  .detail { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
   .detail.hidden { display: none; }
-  .lineage { color: var(--dim); word-break: break-all; margin-bottom: 8px; }
-  .lineage b { color: var(--text); font-weight: 500; }
-  .creature { margin-bottom: 10px; }
+  /* With the prompt gone there is nothing above the detail for a rule to separate it from. */
+  .hint.hidden + .detail { margin-top: 0; border-top: 0; padding-top: 0; }
+  .lineage {
+    color: var(--dimmer); word-break: break-all; margin-bottom: 10px;
+    padding: 6px 8px; background: var(--raised); border-radius: var(--radius-sm);
+  }
+  .lineage b { color: var(--accent); font-weight: 600; }
+  .hint { color: var(--dimmer); padding: 4px 0 2px; }
+  .hint.hidden { display: none; }
+
+  /* -- the creature viewers ----------------------------------------------------------- */
+  .creature { margin-bottom: 12px; }
   .creature.hidden { display: none; }
-  #creature { display: block; width: 100%; height: 200px; border-radius: 6px;
-              background: linear-gradient(#11161d, #0b0e13); cursor: grab; }
-  #creature:active { cursor: grabbing; }
-  .creature .caption { color: var(--dim); margin-top: 4px; text-align: center; }
-  .drift { margin-top: 10px; }
-  .drift .head { color: var(--dim); margin-bottom: 4px; }
-  .drift .bar { position: relative; height: 3px; background: var(--line); border-radius: 2px; margin: 1px 0 4px; }
-  .drift .bar i { position: absolute; top: 0; height: 3px; border-radius: 2px; background: var(--accent); }
-  .drift .bar i.down { background: #6f8fbf; }
+  .creature canvas {
+    display: block; width: 100%; height: 210px;
+    border-radius: var(--radius-sm); border: 1px solid var(--line-soft);
+    /* Matches the viewer's own clear colour, so the frame never shows a seam. */
+    background: #0b0e13;
+    cursor: grab; touch-action: none;
+  }
+  .creature canvas:active { cursor: grabbing; }
+  .creature .caption {
+    color: var(--dimmer); margin-top: 6px; text-align: center; font-size: 12px;
+  }
+
+  /* Reserve against its two landmarks: the ceiling it cannot exceed and the level at which it
+     would breed. Seeing where a starving animal sits between them is the point of the panel. */
+  .meter {
+    position: relative; height: 8px; background: var(--raised);
+    border: 1px solid var(--line-soft); border-radius: 4px; margin: 6px 0 3px;
+  }
+  .meter i {
+    position: absolute; left: 0; top: 0; height: 100%; border-radius: 3px;
+    background: var(--good); transition: width .2s ease;
+  }
+  .meter i.low { background: var(--bad); }
+  .meter u { position: absolute; top: -3px; width: 2px; height: calc(100% + 6px);
+             background: var(--accent); border-radius: 1px; }
+  /* The one piece of prose in the interface, so it is given room to be read as prose. */
+  .verdict {
+    margin-top: 16px; padding: 10px 12px;
+    background: var(--raised); border-left: 2px solid var(--accent);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    line-height: 1.7; color: var(--text);
+  }
+
+  .drift { margin-top: 14px; }
+  .drift .row { padding-top: 7px; }
+  .drift .bar {
+    position: relative; height: 4px; background: var(--raised);
+    border-radius: 2px; margin: 2px 0 6px;
+  }
+  .drift .bar i { position: absolute; top: 0; height: 4px; border-radius: 2px; background: var(--accent); }
+  .drift .bar i.down { background: var(--cool); }
+
+  /* -- controls ----------------------------------------------------------------------- */
   footer {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    padding: 12px 18px; border-top: 1px solid var(--line);
-    position: sticky; bottom: 0; background: var(--bg);
+    padding: 11px 20px; border-top: 1px solid var(--line);
+    position: sticky; bottom: 0; z-index: 5;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
   }
+  footer .meta { color: var(--dimmer); font-size: 11px; letter-spacing: .1em;
+                 text-transform: uppercase; }
   button, select, input {
     font: inherit; color: var(--text); background: var(--panel);
-    border: 1px solid var(--line); border-radius: 3px; padding: 5px 11px;
+    border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 12px;
   }
-  button { cursor: pointer; }
-  button:hover:not(:disabled) { border-color: var(--accent); }
+  button { cursor: pointer; transition: border-color .12s ease, color .12s ease,
+                                        background .12s ease; }
+  button:hover:not(:disabled) { border-color: #3a4756; background: var(--raised); }
   button:disabled { opacity: .45; cursor: default; }
-  button.on { border-color: var(--accent); color: var(--accent); }
-  input[type=number] { width: 88px; }
+  button.on {
+    border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
+  }
+  #play { min-width: 92px; font-weight: 500; }
+  /* The three speeds are one control with three positions, so they are drawn as one. */
+  .segmented { display: flex; }
+  .segmented button { border-radius: 0; margin-left: -1px; padding: 6px 11px; }
+  .segmented button:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); margin-left: 0; }
+  .segmented button:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+  .segmented button.on { position: relative; z-index: 1; }
+  select { padding-right: 8px; }
+  input[type=number] { width: 92px; }
+  .keys { color: var(--dimmer); font-size: 11px; }
+  .keys kbd {
+    font: inherit; padding: 1px 5px; border: 1px solid var(--line);
+    border-radius: 3px; background: var(--panel); color: var(--dim);
+  }
   .spacer { flex: 1; }
-  .status { color: var(--dim); }
-  .status.err { color: var(--bad); }
-  .status.extinct { color: var(--bad); }
+  .status { color: var(--dim); font-size: 12px; }
+  .status.err, .status.extinct { color: var(--bad); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -104,13 +289,14 @@
   <h1>evosim</h1>
   <div class="meta">planet <b id="m-planet">…</b></div>
   <div class="meta">seed <b id="m-seed">…</b></div>
-  <div class="meta">day <b id="m-day">0</b> <span id="m-year"></span></div>
+  <div class="meta" id="m-day-wrap">day <b id="m-day">0</b> <span id="m-year"></span></div>
   <div class="meta">config <b id="m-fp">…</b></div>
 </header>
 
 <main>
-  <section class="panel">
-    <h2 id="layer-title">Population density</h2>
+  <section class="panel map-panel">
+    <h2><span id="layer-title">Population density</span>
+        <span class="aside">click a cell to open an organism</span></h2>
     <canvas id="map"></canvas>
     <div class="legend">
       <span id="legend-min">—</span>
@@ -124,7 +310,8 @@
       <h2>Population</h2>
       <div class="rows">
         <div class="big" id="s-pop">—</div>
-        <div class="row"><span>of cap</span><b id="s-cap">—</b></div>
+        <div class="metric-label">living organisms</div>
+        <div class="row"><span>of capacity</span><b id="s-cap">—</b></div>
         <div class="row"><span>births</span><b id="s-births">—</b></div>
         <div class="row"><span>deaths</span><b id="s-deaths">—</b></div>
         <div class="row sub"><span>starvation</span><b id="s-starve">—</b></div>
@@ -161,6 +348,53 @@
     </section>
 
     <section class="panel">
+      <h2>Organism</h2>
+      <div class="rows">
+        <div class="hint" id="o-hint">click the map to open one individual</div>
+        <div class="detail hidden" id="organism-detail">
+          <div class="creature hidden" id="organism-creature-box">
+            <canvas id="organism-creature"></canvas>
+            <div class="caption"><span id="o-body">—</span></div>
+          </div>
+          <div class="row"><span>id</span><b id="o-id">—</b></div>
+          <div class="row"><span>species</span><b id="o-species">—</b></div>
+          <div class="row"><span>parents</span><b id="o-parents">—</b></div>
+          <div class="row"><span>standing at</span><b id="o-where">—</b></div>
+          <div class="row"><span>company</span><b id="o-company">—</b></div>
+          <div class="row"><span>age</span><b id="o-age">—</b></div>
+          <div class="row"><span>reserve</span><b id="o-energy">—</b></div>
+          <div class="meter"><i id="o-meter"></i><u id="o-repro"></u></div>
+          <div class="row sub"><span>breeds at</span><b id="o-repro-at">—</b></div>
+
+          <div class="head">its energy today</div>
+          <div class="row"><span>intake</span><b id="o-intake">—</b></div>
+          <div class="row sub"><span>autotrophy</span><b id="o-auto">—</b></div>
+          <div class="row sub"><span>detritivory</span><b id="o-detr">—</b></div>
+          <div class="row sub"><span>predation</span><b id="o-eaten">—</b></div>
+          <div class="row"><span>cost</span><b id="o-cost">—</b></div>
+          <div class="row sub"><span>basal</span><b id="o-basal">—</b></div>
+          <div class="row sub"><span>support</span><b id="o-support">—</b></div>
+          <div class="row sub"><span>locomotion</span><b id="o-loco">—</b></div>
+          <div class="row sub"><span>sensory</span><b id="o-sense">—</b></div>
+          <div class="row sub"><span>thermoregulation</span><b id="o-thermo">—</b></div>
+          <div class="row sub"><span>armor</span><b id="o-armor">—</b></div>
+          <div class="row"><span>net</span><b id="o-net">—</b></div>
+
+          <div class="head">what it is trying to eat</div>
+          <div id="o-diet"></div>
+
+          <div class="head">chance of dying today</div>
+          <div id="o-hazards"></div>
+
+          <div class="head">where it is standing</div>
+          <div id="o-environment"></div>
+
+          <div class="verdict" id="o-verdict">—</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
       <h2>Energy ledger (last tick)</h2>
       <div class="rows">
         <div class="row"><span>intake</span><b id="s-intake">—</b></div>
@@ -185,11 +419,14 @@
   <button id="play">▶ play</button>
   <button id="step">step</button>
   <span class="meta">speed</span>
-  <button class="speed on" data-ticks="1">×1</button>
-  <button class="speed" data-ticks="10">×10</button>
-  <button class="speed" data-ticks="100">×100</button>
+  <div class="segmented">
+    <button class="speed on" data-ticks="1">×1</button>
+    <button class="speed" data-ticks="10">×10</button>
+    <button class="speed" data-ticks="100">×100</button>
+  </div>
   <span class="meta">layer</span>
   <select id="layer"></select>
+  <span class="keys"><kbd>space</kbd> play <kbd>s</kbd> step</span>
   <div class="spacer"></div>
   <span class="status" id="status"></span>
   <input type="number" id="seed" placeholder="seed">
@@ -253,7 +490,10 @@ async function api(path, options) {
   const response = await fetch(path, options);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `${response.status} ${response.statusText}`);
+    const error = new Error(body.detail || `${response.status} ${response.statusText}`);
+    // Carried so that "this organism is no longer alive" can be told apart from a real fault.
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -319,6 +559,17 @@ function drawMap(layer) {
 
 // One population-over-time plot, drawn for the whole biosphere and for a single species from
 // the same `{day, population}` shape -- the per-species samples already come in that form.
+// The one place the canvas layers read the stylesheet, so a theme change reaches the chart and
+// the map legend as well as the panels around them.
+const THEME = (() => {
+  const style = getComputedStyle(document.documentElement);
+  const read = (name) => style.getPropertyValue(name).trim();
+  return {
+    accent: read("--accent"), dim: read("--dim"), dimmer: read("--dimmer"),
+    line: read("--line-soft"),
+  };
+})();
+
 function drawChart(canvas, history) {
   const ctx = canvas.getContext("2d");
   const width = canvas.clientWidth, height = 130;
@@ -328,25 +579,41 @@ function drawChart(canvas, history) {
   if (history.length < 2) return;
 
   const peak = Math.max(...history.map((h) => h.population), 1);
+  const pad = 6;
   const x = (i) => (i / (history.length - 1)) * width;
-  const y = (v) => height - 4 - (v / peak) * (height - 12);
+  const y = (v) => height - 14 - (v / peak) * (height - 30);
+
+  // Two rules to read the curve against: the peak it never crosses, and half of it.
+  ctx.strokeStyle = THEME.line;
+  ctx.lineWidth = 1;
+  for (const level of [peak, peak / 2]) {
+    ctx.beginPath();
+    ctx.moveTo(0, Math.round(y(level)) + 0.5);
+    ctx.lineTo(width, Math.round(y(level)) + 0.5);
+    ctx.stroke();
+  }
 
   ctx.beginPath();
   history.forEach((h, i) => i ? ctx.lineTo(x(i), y(h.population))
                               : ctx.moveTo(x(i), y(h.population)));
-  ctx.strokeStyle = "#e0a33e";
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = THEME.accent;
+  ctx.lineWidth = 1.75;
+  ctx.lineJoin = "round";
   ctx.stroke();
   ctx.lineTo(width, height); ctx.lineTo(0, height); ctx.closePath();
-  ctx.fillStyle = "rgba(224,163,62,0.10)";
+  const wash = ctx.createLinearGradient(0, 0, 0, height);
+  wash.addColorStop(0, "rgba(232, 178, 86, .20)");
+  wash.addColorStop(1, "rgba(232, 178, 86, .02)");
+  ctx.fillStyle = wash;
   ctx.fill();
 
-  ctx.fillStyle = "#7c8896";
-  ctx.font = "10px ui-monospace, monospace";
-  ctx.fillText(`peak ${peak.toLocaleString()}`, 4, 12);
-  ctx.fillText(`day ${history[0].day}`, 4, height - 2);
+  ctx.font = "10px " + getComputedStyle(canvas).fontFamily;
+  ctx.fillStyle = THEME.dim;
+  ctx.fillText(`peak ${peak.toLocaleString()}`, pad, 13);
+  ctx.fillStyle = THEME.dimmer;
+  ctx.fillText(`day ${history[0].day}`, pad, height - 4);
   const lastLabel = `day ${history[history.length - 1].day}`;
-  ctx.fillText(lastLabel, width - ctx.measureText(lastLabel).width - 2, height - 2);
+  ctx.fillText(lastLabel, width - ctx.measureText(lastLabel).width - pad, height - 4);
 }
 
 // --- species --------------------------------------------------------------------------
@@ -696,10 +963,10 @@ void main() {
   outColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }`;
 
-/* The viewer owns its own GL context and does nothing at all if WebGL2 is unavailable --
-   the rest of the UI is a 2D canvas and must keep working on a machine that cannot do this. */
-const creatureView = (() => {
-  const canvas = $("creature");
+/* Each viewer owns its own GL context and does nothing at all if WebGL2 is unavailable --
+   the rest of the UI is a 2D canvas and must keep working on a machine that cannot do this.
+   Two of these exist: a species' average body, and one individual's own. */
+function makeCreatureView(canvas) {
   let gl = null;
   try {
     gl = canvas.getContext("webgl2", { antialias: true });
@@ -861,7 +1128,10 @@ const creatureView = (() => {
     },
     hide() { running = false; },
   };
-})();
+}
+
+const creatureView = makeCreatureView($("creature"));
+const organismView = makeCreatureView($("organism-creature"));
 
 let selected = null;      // species id whose detail is open, or null for the whole biosphere
 let speciesEver = 0;
@@ -897,7 +1167,7 @@ async function refreshDetail() {
     $("d-end").textContent = report.extinct_day === null
       ? "—" : `day ${fmt(report.extinct_day)} (confirmed ${fmt(report.confirmed_day)})`;
     drawChart($("species-chart"), report.series);
-    showCreature(report.morphology);
+    showCreature(creatureView, "creature-box", "d-body", report.morphology);
 
     // The drift table is the answer to "why did it become this": the traits that moved
     // furthest, relative to what each locus can do, since the species appeared.
@@ -917,32 +1187,178 @@ async function refreshDetail() {
   }
 }
 
-/* The average body of the selected species, drawn beside the numbers describing it. An
-   extinct species has no living members to average, so `morphology` is null and the panel
-   collapses rather than showing a stale animal from whoever was selected before. */
-function showCreature(morphology) {
-  const box = $("creature-box");
-  if (!creatureView.available || !morphology || !meta || !meta.morphology) {
+/* A body drawn beside the numbers describing it: the average of a species, or one individual's
+   own. An extinct species has no living members to average, so `morphology` is null and the
+   panel collapses rather than showing a stale animal from whoever was selected before. */
+function showCreature(view, boxId, captionId, morphology) {
+  const box = $(boxId);
+  if (!view.available || !morphology || !meta || !meta.morphology) {
     box.classList.add("hidden");
-    creatureView.hide();
+    view.hide();
     return;
   }
   box.classList.remove("hidden");
-  creatureView.show(morphology.genes, morphology.diet, meta.morphology);
+  view.show(morphology.genes, morphology.diet, meta.morphology);
   const dominant = Object.entries(morphology.diet)
     .reduce((best, entry) => (entry[1] > best[1] ? entry : best), ["", -1])[0];
   const limbs = Math.round(morphology.genes.limb_pairs) *
     (Math.round(morphology.genes.radial_symmetry) <= 1
       ? 2 : Math.round(morphology.genes.radial_symmetry));
-  $("d-body").textContent =
+  $(captionId).textContent =
     `${dominant} · mass ${sci(morphology.mass)} · ${limbs} limb${limbs === 1 ? "" : "s"}` +
     ` · ${sci(morphology.genes.body_length)} long`;
+}
+
+// --- one organism ---------------------------------------------------------------------
+/* Everything in this panel is a read: the server re-evaluates the same equations the tick
+   runs, for this individual, in the world as it stands now. Nothing is recorded for it. */
+
+let inspected = null;     // organism id whose panel is open, or null
+
+const pct = (p) => `${(p * 100).toFixed(p < 0.001 ? 3 : 1)}%`;
+// A list of label/value rows. A third element marks the row as a total rather than a part of
+// one, so "any cause" does not read as the seventh hazard.
+const rows = (entries) => entries
+  .map(([name, value, total]) =>
+    `<div class="row${total ? "" : " sub"}"><span>${name}</span><b>${value}</b></div>`)
+  .join("");
+
+map.addEventListener("click", async (event) => {
+  if (!meta) return;
+  const box = map.getBoundingClientRect();
+  const column = Math.floor(((event.clientX - box.left) / box.width) * meta.width);
+  const row = Math.floor(((event.clientY - box.top) / box.height) * meta.height);
+  if (column < 0 || column >= meta.width || row < 0 || row >= meta.height) return;
+  try {
+    const cell = await api(`/api/cell/${row * meta.width + column}`);
+    if (cell.count === 0) {
+      closeOrganism(`nothing alive at ${column}, ${row} — click somewhere with population on it`);
+      return;
+    }
+    inspected = cell.ids[0];
+    await refreshOrganism();
+  } catch (error) {
+    setStatus(error.message, "err");
+  }
+});
+
+function closeOrganism(hint) {
+  inspected = null;
+  $("organism-detail").classList.add("hidden");
+  $("o-hint").classList.remove("hidden");
+  $("o-hint").textContent = hint;
+  showCreature(organismView, "organism-creature-box", "o-body", null);
+}
+
+async function refreshOrganism() {
+  if (inspected === null) return;
+  let o;
+  try {
+    o = await api(`/api/organism/${inspected}`);
+  } catch (error) {
+    // Ids are never reused, so a 404 means exactly one thing: it died. Which is worth saying.
+    if (error.status === 404) {
+      closeOrganism(`#${inspected} died on day ${fmt(latest && latest.day)} — click the map for another`);
+      return;
+    }
+    throw error;
+  }
+  $("o-hint").classList.add("hidden");
+  $("organism-detail").classList.remove("hidden");
+  showCreature(organismView, "organism-creature-box", "o-body", o.morphology);
+
+  const set = (id, value) => { $(id).textContent = value; };
+  set("o-id", `#${o.id}`);
+  set("o-species", o.species_id === null ? "—" : `#${o.species_id} · generation ${fmt(o.generation)}`);
+  set("o-parents", o.parents.every((p) => p === null)
+    ? "founder" : o.parents.filter((p) => p !== null).map((p) => `#${p}`).join(" × "));
+  set("o-where", `${o.column}, ${o.row} · ${o.environment.on_land
+    ? "land" : `${sci(o.environment.depth_km)} km down`}`);
+  set("o-company", o.neighbours > 1 ? `${fmt(o.neighbours - 1)} others in this cell` : "alone");
+  set("o-age", `${fmt(o.age)} days${o.thresholds.mature ? "" : ` (mature at ${sci(o.thresholds.maturity_age)})`}`);
+  set("o-energy", `${sci(o.energy)} of ${sci(o.thresholds.storage_capacity)} · ${pct(o.thresholds.fullness)}`);
+  set("o-repro-at", sci(o.thresholds.repro_energy));
+
+  const capacity = o.thresholds.storage_capacity || 1;
+  const meter = $("o-meter");
+  meter.style.width = `${Math.max(0, Math.min(1, o.energy / capacity)) * 100}%`;
+  meter.classList.toggle("low", o.net_energy < 0);
+  $("o-repro").style.left = `${Math.min(1, o.thresholds.repro_energy / capacity) * 100}%`;
+
+  set("o-intake", sci(o.intake.total));
+  set("o-auto", sci(o.intake.autotrophy));
+  set("o-detr", sci(o.intake.detritivory));
+  set("o-eaten", sci(o.intake.predation));
+  set("o-cost", sci(o.costs.total));
+  set("o-basal", sci(o.costs.basal));
+  set("o-support", sci(o.costs.support));
+  set("o-loco", sci(o.costs.locomotion));
+  set("o-sense", sci(o.costs.sensory));
+  set("o-thermo", sci(o.costs.thermoregulation));
+  set("o-armor", sci(o.costs.armor));
+  set("o-net", (o.net_energy >= 0 ? "+" : "") + sci(o.net_energy));
+  $("o-net").style.color = o.net_energy >= 0 ? "var(--good)" : "var(--bad)";
+
+  $("o-diet").innerHTML = rows(Object.entries(o.morphology.diet)
+    .map(([name, share]) => [name, pct(share)]));
+  $("o-hazards").innerHTML = rows([
+    ...Object.entries(o.hazards).filter(([name]) => name !== "combined")
+      .map(([name, p]) => [name, pct(p)]),
+    ["any cause", pct(o.hazards.combined), true],
+    ["being eaten", `${sci(o.predation_risk)} at risk`],
+  ]);
+  $("o-environment").innerHTML = rows([
+    ["temperature", `${o.environment.temperature_c.toFixed(1)} °C`],
+    ["light", sci(o.environment.light)],
+    ["nutrients", sci(o.environment.nutrients)],
+    ["detritus", sci(o.environment.detritus)],
+    ["moisture", sci(o.environment.moisture)],
+    ["toxicity", sci(o.environment.toxicity)],
+  ]);
+  $("o-verdict").innerHTML = verdict(o);
+}
+
+/* The sentence the milestone is judged on: why this organism is dying, or not, said in terms
+   of the rows above it. Nothing here is new information -- it names the largest numbers. */
+function verdict(o) {
+  const biggest = (channels) => Object.entries(channels)
+    .filter(([name]) => name !== "total")
+    .reduce((best, entry) => (entry[1] > best[1] ? entry : best), ["", -Infinity]);
+  const [costName, costValue] = biggest(o.costs);
+  const [foodName, foodValue] = biggest(o.intake);
+  const share = o.costs.total > 0 ? pct(costValue / o.costs.total) : "—";
+  // A hundred per cent of nearly nothing is not what is going on, so say what is going on.
+  const eating = foodValue <= 0
+    ? "It is taking in nothing at all"
+    : o.intake.total < 0.01 * o.costs.total
+      ? `It is earning next to nothing — ${sci(o.intake.total)} against a bill of ${sci(o.costs.total)}`
+      : `Most of what it earns is ${foodName} (${pct(foodValue / o.intake.total)})`;
+  const expectancy = o.hazards.combined > 0
+    ? ` Even fed, its hazards this day come to ${pct(o.hazards.combined)} — about ${fmt(Math.round(1 / o.hazards.combined))} days of life on average.`
+    : "";
+
+  if (o.net_energy < 0) {
+    const days = o.energy > 0 ? Math.max(1, Math.round(o.energy / -o.net_energy)) : 0;
+    return `<b style="color:var(--bad)">Running down.</b> It spends ${sci(-o.net_energy)} more than
+      it earns each day, so its reserve of ${sci(o.energy)} is gone in about ${fmt(days)} day${days === 1 ? "" : "s"}.
+      The largest cost is ${costName} (${share}). ${eating}.${expectancy}`;
+  }
+  if (o.energy >= o.thresholds.repro_energy && o.thresholds.mature) {
+    return `<b style="color:var(--good)">Ready to breed.</b> ${eating}, against ${costName} as its
+      largest cost (${share}), for a surplus of ${sci(o.net_energy)} a day.${expectancy}`;
+  }
+  const short = o.thresholds.repro_energy - o.energy;
+  const days = Math.max(1, Math.round(short / o.net_energy));
+  const wait = o.thresholds.mature ? "" : ` — though it cannot breed for another ${fmt(Math.max(0, Math.round(o.thresholds.maturity_age - o.age)))} days`;
+  return `<b style="color:var(--good)">Gaining.</b> ${eating}, against ${costName} as its largest
+    cost (${share}). At ${sci(o.net_energy)} a day it reaches its breeding reserve in about
+    ${fmt(days)} day${days === 1 ? "" : "s"}${wait}.${expectancy}`;
 }
 
 async function select(id) {
   selected = id;
   $("species-detail").classList.toggle("hidden", id === null);
-  if (id === null) showCreature(null);
+  if (id === null) showCreature(creatureView, "creature-box", "d-body", null);
   document.querySelectorAll("#species-list li").forEach((row) => {
     row.classList.toggle("on", Number(row.dataset.id) === id);
   });
@@ -1024,6 +1440,7 @@ async function refreshSpeciesViews(force) {
   lastSpeciesRefresh = now;
   await refreshSpecies();
   await refreshDetail();
+  await refreshOrganism();
 }
 
 async function stepOnce(ticks) {
@@ -1085,9 +1502,11 @@ $("reset").onclick = async () => {
     meta = await api("/api/meta");
     applyMeta();
     setStatus("");
-    // A reset is a different run, so the species selected in the old one no longer exists.
+    // A reset is a different run, so the species and the organism selected in the old one no
+    // longer exist.
     selected = null;
     $("species-detail").classList.add("hidden");
+    closeOrganism("click the map to open one individual");
     render(state);
     await refreshSpeciesViews(true);
   } catch (error) {

@@ -391,6 +391,98 @@ def test_the_tick_reads_no_state_outside_the_simulation():
     )
 
 
+# -- the organism inspector ------------------------------------------------------------------
+
+
+def test_inspecting_an_organism_changes_nothing():
+    """The inspector is a read: it re-evaluates the tick's equations and writes none of it back.
+
+    This is the constraint the milestone was specified under, so it is asserted rather than
+    assumed -- an inspector that quietly drew down a cell's nutrients would make looking at a
+    run change the run.
+    """
+
+    simulation = Simulation.create(small())
+    simulation.run(5)
+    population = simulation.population
+    before = {name: array.copy() for name, array in simulation.world.arrays().items()}
+    energy = population.energy[population.active].copy()
+    cells = population.cell[population.active].copy()
+
+    simulation.inspect(int(population.organism_id[0]))
+
+    for name, array in simulation.world.arrays().items():
+        assert np.array_equal(array, before[name]), name
+    assert np.array_equal(population.energy[population.active], energy)
+    assert np.array_equal(population.cell[population.active], cells)
+
+
+def test_inspecting_a_dead_organism_is_an_error():
+    simulation = Simulation.create(small())
+    simulation.run(1)
+    with pytest.raises(KeyError):
+        simulation.inspect(10**9)
+
+
+def test_an_inspected_ledger_adds_up():
+    """Every itemised number the panel shows must sum to the total shown beside it."""
+
+    simulation = Simulation.create(small())
+    simulation.run(5)
+    panel = simulation.inspect(int(simulation.population.organism_id[0]))
+
+    costs = panel["costs"]
+    itemised = sum(value for name, value in costs.items() if name != "total")
+    assert costs["total"] == pytest.approx(itemised)
+    intake = panel["intake"]
+    assert intake["total"] == pytest.approx(
+        intake["autotrophy"] + intake["detritivory"] + intake["predation"]
+    )
+    assert panel["net_energy"] == pytest.approx(intake["total"] - costs["total"])
+    assert 0.0 <= panel["hazards"]["combined"] <= 1.0
+
+
+def test_a_starving_organism_explains_itself_from_its_own_panel():
+    """The milestone's acceptance criterion.
+
+    An organism that cannot photosynthesise is starving; its panel has to say so with numbers
+    rather than leave it to be inferred -- a negative ledger, a named channel that is short,
+    and a reserve with a countable number of days left in it.
+    """
+
+    simulation = Simulation.create(
+        small(["energy.intake.k_photo=0.0", "energy.intake.k_detritus=0.0"])
+    )
+    simulation.run(3)
+    panel = simulation.inspect(int(simulation.population.organism_id[0]))
+
+    assert panel["intake"]["total"] == pytest.approx(0.0)
+    assert panel["net_energy"] < 0.0
+    # Which channel is emptying it, and how long that leaves: both readable off the panel.
+    dominant = max(
+        (name for name in panel["costs"] if name != "total"),
+        key=lambda name: panel["costs"][name],
+    )
+    assert dominant == "basal"
+    assert 0.0 < panel["energy"] / -panel["net_energy"] < float("inf")
+    assert panel["energy"] < panel["thresholds"]["repro_energy"]
+
+
+def test_the_inspector_reports_the_cell_the_organism_is_standing_in():
+    simulation = Simulation.create(small())
+    simulation.run(5)
+    population = simulation.population
+    panel = simulation.inspect(int(population.organism_id[0]))
+    width = simulation.world.grid.width
+
+    assert panel["cell"] == int(population.cell[0])
+    assert panel["row"] * width + panel["column"] == panel["cell"]
+    assert panel["environment"]["on_land"] == bool(
+        simulation.world.terrain.land.ravel()[panel["cell"]]
+    )
+    assert panel["neighbours"] >= 1
+
+
 # -- hot path ------------------------------------------------------------------------------------
 
 

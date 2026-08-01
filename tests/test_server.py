@@ -7,7 +7,12 @@ from fastapi.testclient import TestClient
 
 from evosim.config import DEFAULT_CONFIG_DIR, Config
 from evosim.life.phenotype import DIET_NAMES, MORPHOLOGY_NAMES
-from evosim.server.app import LAYERS, MAX_TICKS_PER_REQUEST, create_app
+from evosim.server.app import (
+    LAYERS,
+    MAX_TICKS_PER_REQUEST,
+    OCCUPANTS_LISTED,
+    create_app,
+)
 from evosim.sim import Simulation
 
 
@@ -242,3 +247,55 @@ def test_meta_publishes_the_geometry_constants_the_renderer_needs(
     assert shape["body_density"] == pytest.approx(config.body_density)
     assert shape["min_radius_ratio"] == pytest.approx(config.min_radius_ratio)
     assert shape["taper_gain"] == pytest.approx(config.taper_gain)
+
+
+def test_an_organism_can_be_opened_and_reads_its_own_ledger(client: TestClient) -> None:
+    """One individual, itemised the way the tick ledger itemises the whole population."""
+
+    client.post("/api/step", json={"ticks": 4})
+    simulation = client.app.state.session.simulation
+    organism_id = int(simulation.population.organism_id[0])
+
+    panel = client.get(f"/api/organism/{organism_id}").json()
+    assert panel["id"] == organism_id
+    assert panel["day"] == 4
+    assert set(panel["costs"]) == {
+        "basal",
+        "support",
+        "locomotion",
+        "sensory",
+        "thermoregulation",
+        "armor",
+        "total",
+    }
+    assert set(panel["intake"]) == {"autotrophy", "detritivory", "predation", "total"}
+    assert set(panel["morphology"]["genes"]) == set(MORPHOLOGY_NAMES)
+    assert set(panel["morphology"]["diet"]) == set(DIET_NAMES)
+    assert panel["thresholds"]["storage_capacity"] > 0.0
+    assert "combined" in panel["hazards"]
+
+
+def test_an_organism_that_is_not_alive_is_a_404(client: TestClient) -> None:
+    """Ids are never reused, so this is the answer to a stale selection as well as a wrong one."""
+
+    assert client.get("/api/organism/999999").status_code == 404
+
+
+def test_a_cell_names_who_is_standing_in_it(client: TestClient) -> None:
+    """How a map click becomes a selection."""
+
+    client.post("/api/step", json={"ticks": 4})
+    simulation = client.app.state.session.simulation
+    cell = int(simulation.population.cell[0])
+
+    payload = client.get(f"/api/cell/{cell}").json()
+    assert payload["cell"] == cell
+    assert payload["count"] >= 1
+    assert int(simulation.population.organism_id[0]) in payload["ids"]
+    assert len(payload["ids"]) <= OCCUPANTS_LISTED
+    assert client.get(f"/api/organism/{payload['ids'][0]}").json()["cell"] == cell
+
+
+def test_a_cell_outside_the_grid_is_a_404(client: TestClient, config: Config) -> None:
+    n_cells = config.planet.grid_width * config.planet.grid_height
+    assert client.get(f"/api/cell/{n_cells}").status_code == 404
