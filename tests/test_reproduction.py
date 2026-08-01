@@ -371,8 +371,9 @@ def test_a_throttled_birth_is_not_charged_to_its_parent():
             break
     assert stats.capacity_throttle > 0
     # Every birth that happened fitted in the room that existed; the rest were dropped, not
-    # squeezed in and not billed.
-    assert stats.births <= room
+    # squeezed in and not billed.  `room` is read before the step, and the reap runs before the
+    # breed, so this tick's dead have freed their slots by the time anything is born into them.
+    assert stats.births <= room + stats.deaths
     assert simulation.population.size <= 205
     assert stats.energy_to_offspring > 0.0
     assert np.all(simulation.population.energy[simulation.population.active] >= 0.0)

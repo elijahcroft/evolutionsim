@@ -41,6 +41,7 @@ from evosim.world import World
 
 FloatArray: TypeAlias = NDArray[np.float64]
 IntArray: TypeAlias = NDArray[np.int64]
+BoolArray: TypeAlias = NDArray[np.bool_]
 
 # Candidate 0 is "stay"; candidates 1..4 are the north/east/south/west neighbours in the order
 # Grid.neighbour_indices returns them, so candidate index minus one is a heading.
@@ -65,20 +66,25 @@ class MovementModel:
         energy: EnergyModel,
         drag: FloatArray,
         basal: FloatArray,
+        on_land: BoolArray,
     ) -> FloatArray:
         """Genetic speed, clipped to what the aerobic ceiling can pay for.
 
         Returning the clipped value rather than silently failing to move matters: this is the
         speed the locomotion cost is charged on, so an organism on a low-oxygen planet is
         neither billed for nor credited with movement it could not perform.
+
+        ``on_land`` is needed because the ceiling depends on it: limbs raise it against a
+        substrate and do nothing at sea.
         """
 
         active = population.active
         wanted = population.phenotypes.trait("move_speed", active).astype(np.float64)
         ceiling = energy.max_move_speed(
-            population.phenotypes.mass[active].astype(np.float64),
+            population.phenotypes.batch(0, population.size),
             drag,
             basal,
+            on_land,
         )
         return np.minimum(wanted, ceiling)
 
@@ -141,7 +147,7 @@ class MovementModel:
         phenotype = population.phenotypes.select(movers)
         score = energy.foraging_yield(
             phenotype,
-            world.climate.insolation.ravel()[lookup],
+            world.light.ravel()[lookup],
             world.resources.nutrients.ravel()[lookup],
             world.climate.moisture.ravel()[lookup],
             world.resources.detritus.ravel()[lookup],

@@ -15,7 +15,7 @@ from typing import Mapping, TypeAlias
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from evosim.config import GenomeConfig, MutationConfig
+from evosim.config import GenomeConfig, MorphologyConfig, MutationConfig
 
 
 GenomeArray: TypeAlias = NDArray[np.float32]
@@ -57,6 +57,7 @@ class GenomeSchema:
     span: NDArray[np.float32]
     distance_weights: NDArray[np.float32]
     mutation: MutationConfig
+    morphology: MorphologyConfig
     mutation_rate_index: int | None
     radiation_tolerance_index: int | None
     _distance_weight_sum: float
@@ -94,6 +95,7 @@ class GenomeSchema:
             _readonly_float32(config.distance_weight_array()),
         )
         object.__setattr__(self, "mutation", config.mutation)
+        object.__setattr__(self, "morphology", config.morphology)
         object.__setattr__(
             self,
             "mutation_rate_index",

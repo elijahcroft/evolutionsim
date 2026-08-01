@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from evosim.config import DEFAULT_CONFIG_DIR, Config
+from evosim.life.phenotype import DIET_NAMES, MORPHOLOGY_NAMES
 from evosim.server.app import LAYERS, MAX_TICKS_PER_REQUEST, create_app
 from evosim.sim import Simulation
 
@@ -126,7 +127,7 @@ def diverged_client(config: Config) -> TestClient:
 
 def test_species_lists_the_founder_before_anything_splits(client: TestClient) -> None:
     payload = client.get("/api/species").json()
-    assert len(payload["trait_names"]) == 28
+    assert len(payload["trait_names"]) == 39
     assert [entry["species_id"] for entry in payload["species"]] == [0]
     assert payload["species"][0]["parent"] is None
     assert payload["species"][0]["lineage"] == [0]
@@ -150,8 +151,8 @@ def test_a_species_report_says_what_changed_since_it_appeared(client: TestClient
     report = client.get("/api/species/0").json()
     assert report["species_id"] == 0
     assert report["lineage"] == [0]
-    assert len(report["current_traits"]) == len(report["trait_names"]) == 28
-    assert len(report["drift"]) == 28
+    assert len(report["current_traits"]) == len(report["trait_names"]) == 39
+    assert len(report["drift"]) == 39
     # Ranked by how far each trait moved relative to what its locus can do.
     magnitudes = [abs(entry["span_fraction"]) for entry in report["drift"]]
     assert magnitudes == sorted(magnitudes, reverse=True)
@@ -203,3 +204,41 @@ def test_filtering_by_a_species_that_never_existed_is_a_404(client: TestClient) 
     assert client.post("/api/step", json={"ticks": 1, "species": 3}).status_code == 404
     # ...and the rejected step did not advance the world on its way to failing.
     assert client.get("/api/state").json()["day"] == 0
+
+
+def test_a_species_report_carries_the_body_the_viewer_draws(client: TestClient) -> None:
+    """The creature viewer needs a body plan and a colour; both are reads of existing state.
+
+    Nothing here is computed for the UI's benefit -- the gene means are the same ones the drift
+    table ranks, and the diet fractions are what the phenotype already expressed. The API layer
+    only re-keys them by name so the renderer never has to know a column index.
+    """
+
+    client.post("/api/step", json={"ticks": 4})
+    morphology = client.get("/api/species/0").json()["morphology"]
+
+    assert set(morphology["genes"]) == set(MORPHOLOGY_NAMES)
+    assert morphology["mass"] > 0.0
+    assert morphology["volume"] > 0.0
+    assert morphology["surface_area"] > 0.0
+    assert set(morphology["diet"]) == set(DIET_NAMES)
+    assert sum(morphology["diet"].values()) == pytest.approx(1.0, rel=1e-5)
+
+
+def test_meta_publishes_the_geometry_constants_the_renderer_needs(
+    client: TestClient,
+) -> None:
+    """One set of shape constants, read by the volume integral and by the mesh alike.
+
+    If the UI carried its own copy, the animal on screen could drift away from the animal the
+    energy model charges for, and the whole point of making morphology cost something would
+    quietly stop being true.
+    """
+
+    shape = client.get("/api/meta").json()["morphology"]
+    config = Config.load().genome.morphology
+
+    assert shape["profile_samples"] == config.profile_samples
+    assert shape["body_density"] == pytest.approx(config.body_density)
+    assert shape["min_radius_ratio"] == pytest.approx(config.min_radius_ratio)
+    assert shape["taper_gain"] == pytest.approx(config.taper_gain)

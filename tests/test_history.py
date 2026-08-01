@@ -34,7 +34,7 @@ def small(overrides: list[str] | None = None) -> Config:
 def diverged(simulation: Simulation, rows: slice) -> None:
     population = simulation.population
     schema = population.schema
-    for name in ("temp_optimum", "body_size", "move_speed"):
+    for name in ("temp_optimum", "body_length", "move_speed"):
         index = schema.index_of(name)
         population.genomes[rows, index, :] = schema.high[index]
     population.phenotypes.update(0, population.genomes[: population.size], schema)
@@ -99,7 +99,7 @@ def test_origin_traits_describe_the_group_that_left():
     simulation = Simulation.create(small())
     split_once(simulation)
     schema = simulation.population.schema
-    index = schema.index_of("body_size")
+    index = schema.index_of("body_length")
     assert simulation.history.records[1].origin_traits[index] == pytest.approx(
         float(schema.high[index]), rel=1e-5
     )
@@ -205,7 +205,7 @@ def test_sampled_trait_means_are_the_species_means():
     split_once(simulation)
     population = simulation.population
     sample = simulation.history.sample(10, population)
-    index = population.schema.index_of("body_size")
+    index = population.schema.index_of("body_length")
     for entry in sample.species:
         members = population.species_id[population.active] == entry.species_id
         expected = population.phenotypes.traits[population.active][members, index].mean()

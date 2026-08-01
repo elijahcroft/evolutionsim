@@ -19,7 +19,13 @@ FloatArray = NDArray[np.float64]
 
 @dataclass(slots=True)
 class World:
-    """Complete mutable environment at one simulated day."""
+    """Complete mutable environment at one simulated day.
+
+    ``insolation`` is what arrives at the surface; ``light`` is what reaches the sea floor an
+    organism actually occupies, after the water column above it has absorbed the rest.  On land
+    the two are equal.  Photosynthesis reads ``light`` and nothing else does, which is what
+    makes the deep ocean a place where autotrophy is impossible rather than merely poor.
+    """
 
     config: PlanetConfig
     grid: Grid
@@ -27,6 +33,9 @@ class World:
     climate: Climate
     resources: Resources
     toxicity: FloatArray
+    depth_km: FloatArray
+    transmittance: FloatArray
+    light: FloatArray
     day: int = 0
 
     @classmethod
@@ -43,7 +52,22 @@ class World:
         toxicity = config.base_toxicity + (
             config.toxicity_elevation_coupling * relative_highland
         )
-        return cls(config, grid, terrain, climate, resources, toxicity)
+        depth_km = np.maximum(config.terrain.sea_level - terrain.elevation_km, 0.0)
+        # Transmittance is a property of the water column, so it is computed once rather than
+        # every tick; only the insolation arriving at the surface changes with the season.
+        transmittance = np.exp(-config.climate.light_attenuation_per_km * depth_km)
+        world = cls(
+            config,
+            grid,
+            terrain,
+            climate,
+            resources,
+            toxicity,
+            depth_km,
+            transmittance,
+            climate.insolation * transmittance,
+        )
+        return world
 
     def step(self, ticks: int = 1) -> None:
         if not isinstance(ticks, (int, np.integer)) or isinstance(ticks, bool):
@@ -53,6 +77,7 @@ class World:
         for _ in range(int(ticks)):
             self.day += 1
             self.climate.step(self.grid, self.terrain, self.config, self.day)
+            self.light = self.climate.insolation * self.transmittance
             self.resources.step(self.terrain, self.climate, self.config)
 
     def arrays(self) -> dict[str, NDArray[np.generic]]:
@@ -60,7 +85,9 @@ class World:
         return {
             "elevation_km": self.terrain.elevation_km,
             "land": self.terrain.land,
+            "depth_km": self.depth_km,
             "insolation": self.climate.insolation,
+            "light": self.light,
             "temperature_c": self.climate.temperature_c,
             "moisture": self.climate.moisture,
             "nutrients": self.resources.nutrients,

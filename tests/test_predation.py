@@ -40,7 +40,10 @@ HUNTER = {
     "aggression": 5.0,
     "move_speed": 2.0,
     "sense_range": 4.0,
-    "body_size": 3.0,
+    # 7.5x the founder's length. Mass goes as length cubed, so this is ~420x the founder's
+    # mass -- the same hunter this fixture described before M8, when it said body_size 3.0
+    # against a founder of 0.4.
+    "body_length": 7.5,
 }
 
 

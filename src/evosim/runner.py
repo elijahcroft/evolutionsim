@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KEY.PATH=VALUE",
         help=(
             "override a config value; repeatable. "
-            "e.g. --set planet.gravity=1.4 --set genome.loci.body_size.sigma=0.1"
+            "e.g. --set planet.gravity=1.4 --set genome.loci.body_length.sigma=0.1"
         ),
     )
     return parser

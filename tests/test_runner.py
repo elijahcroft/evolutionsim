@@ -90,7 +90,7 @@ def test_out_writes_world_state(tmp_path):
     metadata = json.loads((tmp_path / "population.json").read_text(encoding="utf-8"))
     assert metadata["kind"] == "diagnostic_population_dump"
     assert metadata["day"] == 3
-    assert len(metadata["locus_names"]) == len(metadata["trait_names"]) == 28
+    assert len(metadata["locus_names"]) == len(metadata["trait_names"]) == 39
 
     # The dump is whoever survived three ticks of ecology, so its size is an outcome rather
     # than the founder count. What must hold is that every array still describes the same
@@ -98,7 +98,7 @@ def test_out_writes_world_state(tmp_path):
     size = metadata["size"]
     assert 0 < size <= 800
     with np.load(tmp_path / "population.npz") as state:
-        assert state["genome"].shape == (size, 28, 2)
+        assert state["genome"].shape == (size, 39, 2)
         assert state["cell"].shape == (size,)
         assert state["diet"].shape == (size, 4)
         assert state["age"].shape == (size,)
@@ -116,7 +116,7 @@ def test_out_writes_the_recorded_history(tmp_path):
     record = json.loads((tmp_path / "history.json").read_text(encoding="utf-8"))
     assert record["day"] == 3
     assert record["seed"] == 42
-    assert len(record["trait_names"]) == 28
+    assert len(record["trait_names"]) == 39
     assert [species["species_id"] for species in record["species"]] == [0]
     assert record["species"][0]["parent"] is None
     assert [sample["day"] for sample in record["samples"]] == [2]

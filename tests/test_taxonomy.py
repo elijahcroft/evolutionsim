@@ -17,7 +17,7 @@ from evosim.evolution.taxonomy import TaxonomyModel
 from evosim.rng import RngBundle
 from evosim.sim import Simulation
 
-DIVERGING_LOCI = ("temp_optimum", "body_size", "move_speed")
+DIVERGING_LOCI = ("temp_optimum", "body_length", "move_speed")
 OTHER_LOCI = ("aggression", "sense_range", "armor", "camouflage")
 
 

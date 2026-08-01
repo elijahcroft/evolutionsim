@@ -84,12 +84,24 @@ def equilibrium_temperature(
     insolation: FloatArray,
     config: PlanetConfig,
 ) -> FloatArray:
+    """Surface equilibrium, cooled upward by elevation and downward by depth.
+
+    The two corrections are deliberately symmetric.  Elevation cools linearly through a lapse
+    rate; depth cools asymptotically toward ``deep_temperature_c``, because a water column does
+    not keep getting colder without limit -- below the thermocline it is simply cold.  Land has
+    zero depth and deep water has zero elevation, so each term only ever touches its own medium.
+    """
+
+    climate = config.climate
     above_sea_level = np.maximum(terrain.elevation_km - config.terrain.sea_level, 0.0)
-    return (
-        config.climate.base_temperature_c
-        + config.climate.insolation_amplitude_c * insolation
-        - config.climate.lapse_rate_c_per_km * above_sea_level
+    surface = (
+        climate.base_temperature_c
+        + climate.insolation_amplitude_c * insolation
+        - climate.lapse_rate_c_per_km * above_sea_level
     )
+    depth_km = np.maximum(config.terrain.sea_level - terrain.elevation_km, 0.0)
+    descent = 1.0 - np.exp(-depth_km / climate.thermocline_scale_km)
+    return surface - (surface - climate.deep_temperature_c) * descent
 
 
 def distance_from_water(water: NDArray[np.bool_]) -> FloatArray:

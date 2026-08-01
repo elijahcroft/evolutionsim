@@ -47,14 +47,18 @@ def render(world: World, output: Path, fingerprint: str) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     arrays = (
         ("Elevation (km)", world.terrain.elevation_km, "terrain"),
+        ("Water depth (km)", world.depth_km, "Blues"),
         ("Temperature (C)", world.climate.temperature_c, "coolwarm"),
-        ("Insolation", world.climate.insolation, "inferno"),
+        ("Insolation (surface)", world.climate.insolation, "inferno"),
+        # The field that decides where an autotroph can earn anything, and the one to read
+        # first when a run's life is not where it was expected to be.
+        ("Light (at depth)", world.light, "inferno"),
         ("Moisture", world.climate.moisture, "Blues"),
         ("Nutrients", world.resources.nutrients, "YlGn"),
         ("Detritus", world.resources.detritus, "copper"),
     )
     extent = (-180.0, 180.0, -90.0, 90.0)
-    figure, axes = plt.subplots(3, 2, figsize=(14, 10), constrained_layout=True)
+    figure, axes = plt.subplots(4, 2, figsize=(14, 13), constrained_layout=True)
     for axis, (title, values, colour_map) in zip(axes.flat, arrays, strict=True):
         image = axis.imshow(
             values,

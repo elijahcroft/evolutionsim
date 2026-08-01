@@ -79,7 +79,8 @@ def test_seed_is_part_of_the_fingerprint(raw):
 def test_expected_loci_are_present(config):
     """The loci the design commits to; a rename should break tests loudly, not silently."""
     required = {
-        "body_size", "metabolic_rate", "temp_optimum", "temp_tolerance",
+        "body_length", "radius_ratio", "fullness", "limb_pairs", "head_size",
+        "metabolic_rate", "temp_optimum", "temp_tolerance",
         "aff_autotroph", "aff_detritus", "aff_herbivore", "aff_carnivore",
         "digestion_efficiency", "move_speed", "sense_range", "maturity_age",
         "repro_threshold", "offspring_count", "parental_investment", "sex_bias",
@@ -217,10 +218,10 @@ def test_locus_interval_must_be_consistently_resolvable_in_float32(raw):
 @pytest.mark.parametrize(
     ("name", "low", "match"),
     [
-        ("body_size", -1.0, "body_size.low must be >= 0"),
+        ("body_length", -1.0, "body_length.low must be >= 0"),
         ("energy_storage", -1.0, "energy_storage.low must be >= 0"),
         ("radiation_tolerance", -1.0, "radiation_tolerance.low must be >= 0"),
-        ("body_slenderness", 0.0, "body_slenderness.low must be > 0"),
+        ("radius_ratio", 0.0, "radius_ratio.low must be > 0"),
     ],
 )
 def test_body_locus_bounds_must_support_valid_geometry(raw, name, low, match):
@@ -233,17 +234,24 @@ def test_body_locus_bounds_must_support_valid_geometry(raw, name, low, match):
 
 def test_body_locus_bounds_must_keep_derived_geometry_finite(raw):
     body = next(
-        item for item in raw["genome"]["loci"] if item["name"] == "body_size"
+        item for item in raw["genome"]["loci"] if item["name"] == "body_length"
     )
     body["high"] = 1e20
 
-    with pytest.raises(ConfigError, match="body mass outside finite float32"):
+    with pytest.raises(ConfigError, match="body volume outside finite float32"):
         Config.from_raw(raw)
 
 
 def test_body_geometry_validation_uses_joint_float32_arithmetic(raw):
+    """Bounds that are individually representable can still overflow when multiplied.
+
+    Volume goes as length cubed, so a body_length whose cube is finite in float32 is fine on its
+    own; it is the storage capacity built on top of it that overflows. The validation has to do
+    the arithmetic, not check the inputs one at a time.
+    """
+
     body = next(
-        item for item in raw["genome"]["loci"] if item["name"] == "body_size"
+        item for item in raw["genome"]["loci"] if item["name"] == "body_length"
     )
     storage = next(
         item for item in raw["genome"]["loci"] if item["name"] == "energy_storage"
@@ -251,7 +259,7 @@ def test_body_geometry_validation_uses_joint_float32_arithmetic(raw):
     body["high"] = float(np.finfo(np.float32).max) ** (1.0 / 3.0)
     storage.update(low=0.0, high=0.1, init=0.05, sigma=0.001)
 
-    with pytest.raises(ConfigError, match="body mass outside finite float32"):
+    with pytest.raises(ConfigError, match="outside finite float32"):
         Config.from_raw(raw)
 
 
@@ -380,9 +388,9 @@ def test_override_nested_section(raw):
 
 def test_override_locus_by_name(raw):
     """Sweeps need to address loci by name; `genome.loci[3].sigma` would be unreadable."""
-    apply_override(raw, "genome.loci.body_size.sigma=0.123")
+    apply_override(raw, "genome.loci.body_length.sigma=0.123")
     cfg = Config.from_raw(raw)
-    assert cfg.genome.loci[cfg.genome.index_of("body_size")].sigma == pytest.approx(0.123)
+    assert cfg.genome.loci[cfg.genome.index_of("body_length")].sigma == pytest.approx(0.123)
 
 
 def test_override_string_value(raw):

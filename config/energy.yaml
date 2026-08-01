@@ -6,7 +6,11 @@
 # fully determines what selection favours.
 #
 # Formulas are documented at the point of use in src/evosim/life/. Symbols below:
-#   m = body mass = body_size^3      g = planet gravity      T = local temperature
+#   m = body mass = volume * body_density    g = planet gravity    T = local temperature
+#
+# Body volume, surface area, frontal area, limb count and slenderness are integrated from the
+# morphology genome in src/evosim/life/phenotype.py. See config/genome.yaml for what the shape
+# genes mean. Nothing here knows what an animal looks like; it only knows these five numbers.
 
 energy_density: 1.0        # energy per unit mass, for predation gain and corpse deposition.
 
@@ -28,18 +32,52 @@ costs:
   upkeep_radiation_tolerance: 0.150
   upkeep_longevity: 0.300           # per unit of (1 - senescence_rate); anti-ageing costs.
 
-  # support = k_support * m * g * (1 + armor) / body_slenderness
+  # support = k_support * m * g * (1 + armor) / slenderness
+  #           * (1 + support_segment_cost * (segment_count - 1) + support_taper_cost * |taper|)
   # Linear in mass and in gravity: holding yourself up on a heavy planet is the dominant
   # penalty on large bodies, which is how "high gravity favours small" emerges rather than
-  # being asserted.
+  # being asserted. `slenderness` is now derived from the body's own proportions rather than
+  # asserted by a locus -- it is 1/(2*radius_ratio).
+  #
+  # The morphology term is the skeleton bill: a segmented body needs a repeated support
+  # structure, and an unbalanced one (bulk pushed fore or aft by `taper`) needs more of it than
+  # a body whose mass sits over its middle. Both are zero for the founder, which has one
+  # segment and no taper, so they change nothing until a lineage evolves into them.
   k_support: 0.006
+  support_segment_cost: 0.030       # per segment beyond the first.
+  support_taper_cost: 0.120         # per unit of |taper|.
 
   # locomotion = k_move * m * move_speed^2 * g^0.5 * medium_drag
+  #              * (cross_section / volume^(2/3) / drag_shape_reference)
+  #              * (1 + limb_drag_cost * limb_count * limb_ratio)
   # Quadratic in speed (drag work), so speed is the single most expensive trait to push.
+  #
+  # Body shape entered the equation in M8, and note carefully what the third line is: frontal
+  # area divided by volume^(2/3), which is *bluntness*, not area. The equation is already
+  # proportional to mass, and area and mass both grow with size, so charging raw frontal area
+  # would bill a large animal twice for being large -- a body six times the founder's length
+  # would pay fifty times over to move, which is a units mistake wearing a biology costume.
+  # Dividing out volume^(2/3) leaves pure shape: a long thin animal and a fat one of the same
+  # volume now pay differently, which is what makes streamlining something selection can find,
+  # while size goes on being paid for exactly once.
+  #
+  # drag_shape_reference is the founder's own bluntness (0.7853982 / 0.4348114^(2/3)), so the
+  # whole factor is exactly 1 for any founder-shaped body at any size. This is a re-expression
+  # of the pre-M8 equation, not a re-tuning of it.
   k_move: 0.004
   move_gravity_exponent: 0.5
   drag_water: 1.6                   # denser medium: costlier to move through...
   drag_land: 1.0
+  drag_shape_reference: 1.3684301
+  # Limbs stick out into the flow and cost drag in every medium...
+  limb_drag_cost: 0.250
+  # ...but they push against a substrate, so they raise the speed ceiling on land only:
+  #   max_move_speed is multiplied by (1 + limb_thrust * limb_count * limb_ratio * limb_splay)
+  # Splay is in there because a limb held under the body pushes against the ground while one
+  # held out to the side is a paddle. In water the factor is absent entirely: there is nothing
+  # to push against, so limbs there are pure drag. That asymmetry is the whole reason limbs are
+  # a real evolutionary decision rather than a free upgrade.
+  limb_thrust: 0.400
   # ...but a dense atmosphere also supports the body, reducing effective support cost.
   # support is divided by (1 + pressure_buoyancy * pressure) on land.
   pressure_buoyancy: 0.05
@@ -50,17 +88,24 @@ costs:
   sense_range_exponent: 1.5
   sense_mass_exponent: 0.25
 
-  # thermoregulation = k_thermo * m^0.67 * max(0, |T - temp_optimum| - temp_tolerance)
-  # Surface-area scaling (2/3), because heat is lost across a surface. Large bodies are
-  # therefore thermally cheaper per unit mass -- Bergmann's rule, emergent.
+  # thermoregulation = k_thermo * (surface_area / thermo_area_reference)
+  #                    * max(0, |T - temp_optimum| - temp_tolerance)
+  # Heat is lost across a surface, and as of M8 that surface is the real integrated area of the
+  # animal's body rather than m^0.67 standing in for one. Bergmann's rule still emerges -- a
+  # bigger body has less surface per unit volume -- but so does the rest of it: a flattened or
+  # finned animal now genuinely pays to keep warm, and a compact one genuinely does not.
+  #
+  # thermo_area_reference is the founder's surface area divided by the founder's old m^0.6667
+  # (2.8747542 / 0.1599853), so a founder-shaped animal pays exactly what it paid before M8 and
+  # k_thermo did not have to be re-tuned when the geometry arrived.
   k_thermo: 0.0030
-  thermo_mass_exponent: 0.6667
+  thermo_area_reference: 17.9688538
 
-  # armor_upkeep = k_armor * armor * m^0.67
-  # The 0.67 here is thermo_mass_exponent above, deliberately shared: both are areas over a
-  # body's surface (heat loss, and the plating that covers it), so they should move together.
-  # If a future model needs them to differ, armor gets its own exponent key -- it must not be
-  # a literal in the code.
+  # armor_upkeep = k_armor * armor * (surface_area / thermo_area_reference)
+  # Armor is plating over a surface, so it shares the surface term with thermoregulation -- as
+  # the pre-M8 version of this comment said it should, back when the shared quantity was an
+  # exponent rather than an area. If a future model needs them to differ, armor gets its own
+  # reference key; it must not become a literal in the code.
   k_armor: 0.0015
 
 # ---- intake, per tick -------------------------------------------------------------------
@@ -77,7 +122,13 @@ intake:
   # founder cell on the reference planet returned its own upkeep and the lineage always died.
   # At 0.30 about 90% of seeded ocean cells are net-positive for the founder genome and the
   # polar 10% are not, which is the intended shape: a habitable planet with unlivable edges.
-  k_photo: 0.300
+  #
+  # Raised to 0.45 in M7, when depth-attenuated light removed roughly a third of the ocean's
+  # usable energy and 0.30 no longer returned the founder lineage's upkeep -- day-one net
+  # energy on the reference planet went to -0.23. This restores it to +1.77, close to the
+  # +1.60 the planet had before the water column started absorbing anything. The constant did
+  # not change because the organisms changed; it changed because the planet got darker.
+  k_photo: 0.450
   photo_mass_exponent: 0.6667
   nutrient_half_saturation: 0.25     # Michaelis-Menten half-saturation constant.
   moisture_half_saturation: 0.15
@@ -85,7 +136,21 @@ intake:
   nutrient_draw_per_energy: 1.0
 
   # detritivory = k_detritus * diet_detritus * m^0.67 * sat(detritus) * digestion_efficiency
-  k_detritus: 0.060
+  #
+  # Calibrated in M7b, the first milestone to ask whether a detritivore could live at all. The
+  # M0 guess of 0.060 made it structurally impossible: intake is capped at k_detritus (the
+  # saturation term cannot exceed 1), so a pure detritivore's best case was 0.0038 against
+  # costs of 0.0046. It was net-negative at *every* detritus level, on every planet, forever --
+  # which meant no environment could ever make detritivory pay and the deep ocean could not
+  # have become a niche however dark it was. That was the real reason nothing ever specialised.
+  #
+  # 0.30 is chosen so the two strategies each win their own zone rather than one dominating:
+  # on a lit shelf an autotroph nets +0.0130 against a detritivore's +0.0069, so detritivory is
+  # a viable but clearly worse living where there is sun; in the dark deep the autotroph is
+  # firmly negative and the detritivore is positive once detritus reaches ~0.3. Raising it to
+  # 0.45 makes detritivory as good as autotrophy on the shelf too, which erases the zonation
+  # instead of creating it.
+  k_detritus: 0.300
   detritus_mass_exponent: 0.6667
   detritus_half_saturation: 0.20
 
@@ -140,4 +205,18 @@ reproduction:
   # Sexual reproduction: a mate must be in the same cell with standardised genetic distance
   # below this threshold. This is what makes assortative mating reinforce speciation.
   mate_search_radius: 0.0           # cells; 0 = same cell only.
-  mate_compatibility_distance: 0.15
+  #
+  # This one constant does two jobs -- it decides who may breed with whom, and (because the
+  # split test reuses it rather than inventing a second number) what counts as a species.
+  #
+  # 0.15 was an M0 guess and M6 could not improve on it, for a decisive reason: measured over
+  # two *completely isolated* lineages, the gap between them fell below the 99th percentile of
+  # ordinary within-population distance. There was no value that separated real lineages
+  # without also cutting an undivided population into pieces, so the number did not matter.
+  #
+  # M7b reopened that window. With a thermocline and a detritivory constant that permits a
+  # second living, isolated lineages now sit at 0.0619 apart against a within-population p99 of
+  # 0.0459 -- signal above noise, with room between them. 0.05 sits in that room. It is the
+  # first value here chosen against a measurement instead of a guess, and it is the reason a
+  # default run now produces more than one species.
+  mate_compatibility_distance: 0.05

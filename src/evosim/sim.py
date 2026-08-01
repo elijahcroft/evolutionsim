@@ -198,7 +198,9 @@ class Simulation:
         # Locomotion is billed on the continuous speed while the organism takes a whole number
         # of steps. That is the correct pairing: the cost is the expected work, and the steps
         # are one unbiased sample of it, so the two agree over a lifetime rather than per tick.
-        speed = self.movement.realized_speed(population, self.energy, drag, basal)
+        speed = self.movement.realized_speed(
+            population, self.energy, drag, basal, departure.on_land
+        )
         census = CellCensus.build(
             population,
             self.config.energy.energy_density,

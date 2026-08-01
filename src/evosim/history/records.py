@@ -28,6 +28,7 @@ from numpy.typing import NDArray
 
 from evosim.config import Config
 from evosim.evolution.taxonomy import Split
+from evosim.life.phenotype import DIET_NAMES, MORPHOLOGY_NAMES
 from evosim.life.population import UNASSIGNED, Population
 
 FloatArray: TypeAlias = NDArray[np.float64]
@@ -253,7 +254,7 @@ class History:
         def totals(values: FloatArray) -> FloatArray:
             return np.bincount(species, weights=values, minlength=counts.size)
 
-        # One bincount per locus rather than a scatter-add: the loop is over the 28 loci and
+        # One bincount per locus rather than a scatter-add: the loop is over the loci and
         # never over organisms, which is the rule the hot path is held to as well.
         trait_totals = np.stack(
             [totals(traits[:, locus]) for locus in range(traits.shape[1])], axis=1
@@ -371,7 +372,49 @@ class History:
             "current_traits": list(current) if current is not None else None,
             "series": series,
             "drift": drift,
+            "morphology": self._morphology(population, rows, reference),
         }
+
+    def _morphology(
+        self,
+        population: Population,
+        rows: IntArray,
+        reference: tuple[float, ...] | None,
+    ) -> dict[str, Any] | None:
+        """This species' average body, in the form the creature viewer draws.
+
+        A read of state that already exists: the same trait means the drift table is built from,
+        re-keyed by gene name so the UI does not have to know column indices, plus the mean diet
+        that decides the animal's colour.  The simulation is not told that a renderer exists --
+        this is the API layer choosing what to expose, which is rule 4 of the roadmap.
+        """
+
+        if reference is None:
+            return None
+        genes = {
+            name: reference[population.schema.index_of(name)]
+            for name in MORPHOLOGY_NAMES
+        }
+        diet = population.phenotypes.diet[population.active][rows]
+        body = {
+            "volume": 0.0,
+            "surface_area": 0.0,
+            "mass": 0.0,
+            "diet": dict.fromkeys(DIET_NAMES, 0.0),
+        }
+        if rows.size:
+            phenotypes = population.phenotypes
+            active = population.active
+            body = {
+                "volume": float(phenotypes.volume[active][rows].mean()),
+                "surface_area": float(phenotypes.surface_area[active][rows].mean()),
+                "mass": float(phenotypes.mass[active][rows].mean()),
+                "diet": {
+                    name: float(diet[:, index].mean())
+                    for index, name in enumerate(DIET_NAMES)
+                },
+            }
+        return {"genes": genes, **body}
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the whole record for a run dump or an API."""

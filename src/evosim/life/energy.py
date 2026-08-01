@@ -54,6 +54,8 @@ class Environment:
 
     temperature_c: FloatArray
     insolation: FloatArray
+    light: FloatArray
+    depth_km: FloatArray
     moisture: FloatArray
     nutrients: FloatArray
     detritus: FloatArray
@@ -72,6 +74,8 @@ class Environment:
         return cls(
             temperature_c=world.climate.temperature_c.ravel()[index],
             insolation=world.climate.insolation.ravel()[index],
+            light=world.light.ravel()[index],
+            depth_km=world.depth_km.ravel()[index],
             moisture=world.climate.moisture.ravel()[index],
             nutrients=world.resources.nutrients.ravel()[index],
             detritus=world.resources.detritus.ravel()[index],
@@ -152,32 +156,103 @@ class EnergyModel:
 
     def max_move_speed(
         self,
-        mass: FloatArray,
+        phenotype: PhenotypeBatch,
         drag: FloatArray,
         basal: FloatArray,
+        on_land: BoolArray,
     ) -> FloatArray:
         """Highest speed whose locomotion cost still fits inside the aerobic ceiling.
 
         Basal metabolism itself consumes one unit of scope, so ``scope - 1`` is what remains
         for activity.  Inverting the locomotion equation for speed is exact, so no organism can
         ever spend more on movement than its oxygen supply supports.
+
+        Limbs then multiply the result, but only on land.  This is the one place morphology
+        *earns* rather than costs, and it is deliberately narrow: a limb pushes against a
+        substrate, so in water it is drag and nothing else.  A lineage that grows legs at sea
+        pays for them every tick and gets nothing back, which is what makes limbs a decision.
         """
 
         costs = self.energy.costs
         budget = max(self.aerobic_scope - 1.0, 0.0) * basal
         denominator = (
             costs.k_move
-            * mass
+            * phenotype.mass.astype(np.float64)
             * self.planet.gravity**costs.move_gravity_exponent
             * drag
+            * self.frontal_drag(phenotype)
+            * self.limb_drag(phenotype)
         )
-        return np.sqrt(
+        ceiling = np.sqrt(
             np.divide(
                 budget,
                 denominator,
                 out=np.full_like(np.asarray(denominator, dtype=np.float64), np.inf),
                 where=denominator > 0.0,
             )
+        )
+        return ceiling * np.where(on_land, self.limb_thrust(phenotype), 1.0)
+
+    # -- morphology terms ----------------------------------------------------------------
+    #
+    # Three small factors, each written so that a founder-shaped animal evaluates to exactly
+    # 1.0.  That is what let M8 add geometry to the cost equations without re-tuning a single
+    # constant that M3, M7 and M7b had calibrated against the old scalar body.
+
+    def frontal_drag(self, phenotype: PhenotypeBatch) -> FloatArray:
+        """How blunt this body is, relative to a founder-shaped body of the same volume.
+
+        Note what this is *not*: it is not frontal area. The locomotion equation is already
+        proportional to mass, and mass and frontal area both grow with body size, so charging
+        the raw area would bill a large animal twice for being large -- a body six times the
+        founder's length would pay fifty times more to move, which is arithmetic, not biology.
+
+        Dividing frontal area by ``volume**(2/3)`` removes the size and leaves the shape. The
+        result is exactly 1 for any founder-shaped animal at any size, above 1 for a blunter one
+        and below 1 for a more streamlined one, so streamlining becomes something selection can
+        find while size keeps being paid for exactly once.
+        """
+
+        cross_section = phenotype.cross_section.astype(np.float64)
+        volume = phenotype.volume.astype(np.float64)
+        return (
+            cross_section
+            / np.cbrt(volume * volume)
+            / self.energy.costs.drag_shape_reference
+        )
+
+    def limb_drag(self, phenotype: PhenotypeBatch) -> FloatArray:
+        """What limbs cost to drag through any medium."""
+
+        costs = self.energy.costs
+        return 1.0 + costs.limb_drag_cost * phenotype.limb_count.astype(
+            np.float64
+        ) * phenotype.trait("limb_ratio").astype(np.float64)
+
+    def limb_thrust(self, phenotype: PhenotypeBatch) -> FloatArray:
+        """What limbs earn against a substrate.
+
+        Splay is the difference between a leg and a paddle: limbs held under the body push
+        against the ground, limbs held out to the side do not.
+        """
+
+        costs = self.energy.costs
+        return 1.0 + costs.limb_thrust * phenotype.limb_count.astype(
+            np.float64
+        ) * phenotype.trait("limb_ratio").astype(np.float64) * phenotype.trait(
+            "limb_splay"
+        ).astype(np.float64)
+
+    def support_morphology(self, phenotype: PhenotypeBatch) -> FloatArray:
+        """The skeleton bill for a segmented or unbalanced body."""
+
+        costs = self.energy.costs
+        segments = phenotype.trait("segment_count").astype(np.float64)
+        taper = phenotype.trait("taper").astype(np.float64)
+        return (
+            1.0
+            + costs.support_segment_cost * np.maximum(segments - 1.0, 0.0)
+            + costs.support_taper_cost * np.abs(taper)
         )
 
     # -- costs ---------------------------------------------------------------------------
@@ -226,22 +301,30 @@ class EnergyModel:
         costs = self.energy.costs
         return np.where(on_land, costs.drag_land, costs.drag_water).astype(np.float64)
 
+    def relative_surface(self, surface_area: FloatArray) -> FloatArray:
+        """Surface area as a multiple of the founder's, shared by heat loss and armor plating."""
+
+        return surface_area / self.energy.costs.thermo_area_reference
+
     def thermoregulation_cost(
         self,
-        mass: FloatArray,
+        surface_area: FloatArray,
         temp_optimum: FloatArray,
         temp_tolerance: FloatArray,
         temperature_c: FloatArray,
     ) -> FloatArray:
-        """Surface-area-scaled cost of holding body temperature outside the free window.
+        """Cost of holding body temperature outside the free window, scaled by real area.
 
-        The 2/3 exponent is why large bodies are thermally cheap per unit mass, so Bergmann's
-        rule can emerge in cold cells without being written anywhere.
+        Heat leaves across a surface, so this is charged on the integrated surface of the actual
+        body.  Bergmann's rule still emerges -- a larger body has less surface per unit volume --
+        but now so does the rest of the shape argument: a finned or flattened animal is expensive
+        to keep warm in a cold cell and a compact one is not, and neither fact is written
+        anywhere as a rule.
         """
 
         costs = self.energy.costs
         excess = thermal_excess(temperature_c, temp_optimum, temp_tolerance)
-        return costs.k_thermo * mass**costs.thermo_mass_exponent * excess
+        return costs.k_thermo * self.relative_surface(surface_area) * excess
 
     def costs_for(
         self,
@@ -261,6 +344,7 @@ class EnergyModel:
 
         costs = self.energy.costs
         mass = phenotype.mass.astype(np.float64)
+        surface_area = phenotype.surface_area.astype(np.float64)
         if drag is None:
             drag = self.medium_drag(environment.on_land)
 
@@ -278,7 +362,8 @@ class EnergyModel:
             * mass
             * self.planet.gravity
             * (1.0 + phenotype.trait("armor"))
-            / phenotype.trait("body_slenderness")
+            / phenotype.slenderness.astype(np.float64)
+            * self.support_morphology(phenotype)
         )
         support = np.where(
             environment.on_land,
@@ -292,6 +377,8 @@ class EnergyModel:
             * speed**2
             * self.planet.gravity**costs.move_gravity_exponent
             * drag
+            * self.frontal_drag(phenotype)
+            * self.limb_drag(phenotype)
         )
         sensory = (
             costs.k_sense
@@ -299,17 +386,17 @@ class EnergyModel:
             * mass**costs.sense_mass_exponent
         )
         thermoregulation = self.thermoregulation_cost(
-            mass,
+            surface_area,
             phenotype.trait("temp_optimum").astype(np.float64),
             phenotype.trait("temp_tolerance").astype(np.float64),
             environment.temperature_c,
         )
-        # Armor is plating over a surface, so it shares the surface exponent thermoregulation
-        # uses rather than carrying a duplicate config key. energy.yaml records that choice.
+        # Armor is plating over a surface, so it shares the surface term thermoregulation uses
+        # rather than carrying a duplicate config key. energy.yaml records that choice.
         armor = (
             costs.k_armor
             * phenotype.trait("armor").astype(np.float64)
-            * mass**costs.thermo_mass_exponent
+            * self.relative_surface(surface_area)
         )
         return Costs(
             basal=basal,
@@ -327,7 +414,7 @@ class EnergyModel:
         mass: FloatArray,
         diet_autotroph: FloatArray,
         digestion_efficiency: FloatArray,
-        insolation: FloatArray,
+        light: FloatArray,
         nutrients: FloatArray,
         moisture: FloatArray,
     ) -> FloatArray:
@@ -336,6 +423,10 @@ class EnergyModel:
         Mass enters at 2/3 while basal cost enters at 3/4, so an autotroph has a size at which
         its own upkeep overtakes what its surface can collect.  That ceiling, not any rule, is
         why an autotrophic lineage stays small until it finds a denser energy source.
+
+        ``light`` is what reaches the organism, not what reaches the surface.  Below the photic
+        depth it is effectively zero, so this term is too however autotrophic the genome is:
+        the deep ocean forecloses one way of making a living rather than taxing it.
         """
 
         intake = self.energy.intake
@@ -343,7 +434,7 @@ class EnergyModel:
             intake.k_photo
             * diet_autotroph
             * mass**intake.photo_mass_exponent
-            * insolation
+            * light
             * saturation(nutrients, intake.nutrient_half_saturation)
             * saturation(moisture, intake.moisture_half_saturation)
             * digestion_efficiency
@@ -370,7 +461,7 @@ class EnergyModel:
     def foraging_yield(
         self,
         phenotype: PhenotypeBatch,
-        insolation: FloatArray,
+        light: FloatArray,
         nutrients: FloatArray,
         moisture: FloatArray,
         detritus: FloatArray,
@@ -391,7 +482,7 @@ class EnergyModel:
             mass,
             phenotype.diet_component("autotroph").astype(np.float64)[:, None],
             digestion,
-            insolation,
+            light,
             nutrients,
             moisture,
         ) + self.detritivory(
@@ -401,7 +492,7 @@ class EnergyModel:
             detritus,
         )
         return gain - self.thermoregulation_cost(
-            mass,
+            phenotype.surface_area.astype(np.float64)[:, None],
             phenotype.trait("temp_optimum").astype(np.float64)[:, None],
             phenotype.trait("temp_tolerance").astype(np.float64)[:, None],
             temperature_c,
@@ -431,7 +522,7 @@ class EnergyModel:
             mass,
             phenotype.diet_component("autotroph").astype(np.float64),
             digestion,
-            environment.insolation,
+            environment.light,
             environment.nutrients,
             environment.moisture,
         )

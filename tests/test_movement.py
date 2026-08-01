@@ -96,8 +96,11 @@ def test_a_sub_unit_speed_still_moves_the_population(config: Config):
 
 def test_realized_speed_never_exceeds_the_genetic_speed(config: Config):
     world, population, energy, movement, _ = build(config, move_speed=3.0)
-    drag = energy.medium_drag(np.zeros(population.size, dtype=bool))
-    speed = movement.realized_speed(population, energy, drag, basal_of(population, energy))
+    at_sea = np.zeros(population.size, dtype=bool)
+    drag = energy.medium_drag(at_sea)
+    speed = movement.realized_speed(
+        population, energy, drag, basal_of(population, energy), at_sea
+    )
     assert np.all(speed <= 3.0 + 1e-6)
 
 
@@ -105,14 +108,15 @@ def test_thin_oxygen_slows_a_population_down(config: Config):
     from dataclasses import replace
 
     world, population, energy, movement, _ = build(config, move_speed=6.0)
-    drag = energy.medium_drag(np.zeros(population.size, dtype=bool))
+    at_sea = np.zeros(population.size, dtype=bool)
+    drag = energy.medium_drag(at_sea)
     basal = basal_of(population, energy)
     thin = EnergyModel.from_config(
         replace(config, planet=replace(config.planet, o2_fraction=0.005))
     )
-    assert movement.realized_speed(population, thin, drag, basal).mean() < movement.realized_speed(
-        population, energy, drag, basal
-    ).mean()
+    assert movement.realized_speed(
+        population, thin, drag, basal, at_sea
+    ).mean() < movement.realized_speed(population, energy, drag, basal, at_sea).mean()
 
 
 # -- staying put ---------------------------------------------------------------------------------

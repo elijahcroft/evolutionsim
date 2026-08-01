@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,11 +31,13 @@ UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 LAYERS: dict[str, str] = {
     "population": "Population density",
     "elevation_km": "Elevation",
+    "depth_km": "Water depth",
     "temperature_c": "Temperature",
     "nutrients": "Nutrients",
     "detritus": "Detritus",
     "moisture": "Moisture",
-    "insolation": "Insolation",
+    "insolation": "Insolation (surface)",
+    "light": "Light (at depth)",
     "toxicity": "Toxicity",
 }
 
@@ -80,6 +82,9 @@ class Session:
             "capacity": self.simulation.population.capacity,
             "year_length_days": planet.year_length_days,
             "layers": [{"name": name, "label": label} for name, label in LAYERS.items()],
+            # The creature viewer builds its mesh from these, which is what makes the animal on
+            # screen the same animal the energy model charges: both read one set of constants.
+            "morphology": asdict(self.config.genome.morphology),
         }
 
     def state(self, layer: str, species: int | None = None) -> dict[str, Any]:

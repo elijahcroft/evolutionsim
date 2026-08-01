@@ -103,8 +103,13 @@ class Population:
         """Allocate a population and seed its configured founder lineage.
 
         Founder cells are sampled with replacement from the requested habitat, weighted by
-        physical cell area.  Area weighting avoids reintroducing an equirectangular projection
-        bias in which the tiny polar cells would be as likely as equatorial cells.
+        physical cell area and by the light reaching them.  Area weighting avoids reintroducing
+        an equirectangular projection bias in which the tiny polar cells would be as likely as
+        equatorial cells.  Light weighting says that a lineage begins where there is energy to
+        begin on: seeding an autotroph founder uniformly across an ocean that is dark below the
+        shelf would drown most of the run's initial population in the first few ticks and call
+        it selection.  On a planet without light attenuation every transmittance is 1 and this
+        term does nothing, so it changes no world that did not already have a deep ocean.
 
         Founders use the same starting-energy rule as future newborns: their expressed
         ``parental_investment`` fraction of adult storage capacity.  This introduces no extra
@@ -122,11 +127,12 @@ class Population:
         weights = world.grid.cell_area_weights.ravel()[valid_cells].astype(
             np.float64, copy=True
         )
+        weights *= world.transmittance.ravel()[valid_cells]
         weight_sum = float(weights.sum())
         if not np.isfinite(weight_sum) or weight_sum <= 0.0:
             raise HabitatError(
                 f"cannot seed founders: {config.sim.initial_habitat} habitat has no "
-                "positive-area cells"
+                "positive-area lit cells"
             )
         weights /= weight_sum
         cells = rng.init.choice(

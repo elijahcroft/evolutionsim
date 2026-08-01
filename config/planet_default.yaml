@@ -15,7 +15,13 @@ grid_height: 64
 gravity: 1.0            # in g. Enters body-support and locomotion cost.
 o2_fraction: 0.21       # by volume. Caps aerobic scope => caps size x metabolic_rate product.
 o2_reference: 0.21      # the fraction at which aerobic scope is 1.0; do not vary casually.
-pressure: 1.0           # atm. Enters pressure-tolerance mismatch hazard and drag.
+pressure: 1.0           # atm at the surface. Enters pressure-tolerance mismatch hazard and drag.
+# Added to surface pressure per km of water above an organism. At the default 6 km sea floor
+# this makes the deepest water differ from the surface by 0.9, which is the difference the
+# mismatch hazard is scaled for -- so the deep is survivable, but only for a lineage that has
+# actually evolved pressure_tolerance. With this at 0 the locus is dead: on a 1 atm planet the
+# mismatch term is identically zero everywhere, which is what it was until now.
+pressure_per_km_depth: 0.15
 solar_constant: 1.0     # relative to Earth. Scales insolation, hence autotrophic intake.
 radiation: 0.0          # relative surface ionising flux. Raises mutation rate AND mortality.
 
@@ -51,6 +57,25 @@ climate:
   moisture_ocean: 1.0
   moisture_decay_per_cell: 0.12
   moisture_min: 0.02
+  # Light reaching the sea floor: insolation * exp(-attenuation * depth_km). Organisms live at
+  # the floor, so this decides how much of the ocean can photosynthesise at all.
+  #
+  # Earth's photic zone ends near 0.2 km, an attenuation around 23. On a 6 km floor that leaves
+  # a shelf of a couple of percent of cells and starves everything else, and it is the wrong
+  # number here anyway: real marine primary production happens in the surface layer, which a
+  # single-layer world does not have. 0.75 was chosen by measurement, not by physics -- it is
+  # the largest value that leaves the reference planet's marine population healthy while still
+  # emptying the abyss. Life settles across 0-2 km and stops; see DEVLOG for the depth profile.
+  light_attenuation_per_km: 0.75
+  # The thermocline. Water temperature falls from its surface equilibrium toward
+  # deep_temperature_c, asymptotically, over thermocline_scale_km -- Earth's deep ocean is
+  # near 4 C everywhere regardless of the latitude above it, and does not keep cooling with
+  # depth once it gets there. Added in M7b because a light gradient alone gave the deep no
+  # character of its own: it was dark, and otherwise identical to the shelf. Cold buys two
+  # things -- detritus decays more slowly where it lands (the Q10 term in resources), and a
+  # deep lineage has a genuinely different thermal optimum to adapt toward.
+  deep_temperature_c: 4.0
+  thermocline_scale_km: 1.0
 
 # ---- resources -------------------------------------------------------------------------
 resources:
@@ -64,6 +89,12 @@ resources:
   detritus_decay_rate: 0.01
   detritus_decay_q10: 2.0        # decay rate doubles per +10 C.
   detritus_reference_temp_c: 15.0
+  # Marine snow. Each tick a water cell sends this fraction of its detritus to its deepest
+  # water neighbour. Without it the dark ocean is not a niche but a dead zone: no light means
+  # no autotrophs, no autotrophs means no corpses, and a detritivore starves there as surely
+  # as a photosynthesiser does. This is the term that connects the lit shelf that produces
+  # food to the dark floor that can only inherit it, and it conserves matter exactly.
+  detritus_sink_fraction: 0.10
 
 # ---- toxicity --------------------------------------------------------------------------
 # A static hostile-chemistry field. Uniform by default; raise it to make the planet hostile.

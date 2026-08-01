@@ -17,6 +17,53 @@ mutation:
   # (1 + radiation_sensitivity * planet.radiation / (1 + radiation_tolerance)).
   radiation_sensitivity: 4.0
 
+# What the morphology loci mean geometrically. These constants are not tuning dials -- they are
+# the definition of the body a genome describes, and the phenotype's volume integral and the
+# renderer's mesh both read them, so the animal you look at and the animal that pays costs are
+# the same animal. They are here rather than as literals in phenotype.py because they change
+# body volume, volume changes mass, and mass changes every cost in the simulation.
+#
+# The profile itself, with t running 0 (tail end) to 1 (head end):
+#   radius(t) = body_radius * (4t(1-t))^fullness
+#               * (1 + taper * (t - 0.5) * taper_gain)
+#               * (1 - segment_depth * segment_relief * (1 - cos(2*pi*t*segment_count)) / 2)
+morphology:
+  # Samples along the body used for the volume and surface-area sums. The body is treated as a
+  # stack of conical frustums between consecutive samples -- which is exactly what the renderer
+  # draws -- so these are the volume and area of the mesh itself, not of an idealised solid it
+  # approximates.
+  #
+  # 129 is set by Nyquist, not by taste. segment_count reaches 14, which puts 14 full ripples
+  # around the body, and a sample count that cannot resolve them does not merely lose accuracy,
+  # it aliases: measured against an 8193-sample reference over 2000 random bodies spanning every
+  # locus, 33 samples were wrong by up to 1.6% in volume and 17% in surface area, all of it
+  # concentrated on the most segmented animals. At 129 the worst case is 0.22% and 1.4% and the
+  # median is a part in ten thousand, which is far below the uncertainty in any coefficient in
+  # energy.yaml. Doubling again buys another factor of three for another factor of two in time.
+  profile_samples: 129
+  # Mass per unit volume. This is the constant that anchors M8 to everything calibrated before
+  # it: it is chosen so the founder genome's mass comes out at 0.064, the value k_photo,
+  # k_detritus and mate_compatibility_distance were all calibrated against in M3/M7/M7b.
+  # It is a unit conversion, not a dial -- if you change it, you have changed every organism's
+  # mass and you must recalibrate energy.yaml.
+  # The founder body (length 1.0, radius_ratio 0.50, fullness 0.90, nothing else) integrates to
+  # a volume of 0.4348114, and 0.064 / 0.4348114 is this number. It looks arbitrary because it
+  # is a measurement, not a choice. It depends on profile_samples above, so changing that
+  # changes this.
+  body_density: 0.1471903
+  # Radius floor, as a fraction of the body's own radius rather than an absolute length. An
+  # absolute floor would be most of a small animal and nothing to a large one -- doubling every
+  # gene would then stop doubling the animal, and volume would stop scaling as length cubed.
+  min_radius_ratio: 0.010
+  taper_gain: 1.2          # how strongly taper shifts bulk fore/aft.
+  segment_relief: 0.28     # depth of the somite ripple at segment_depth = 1.
+  head_radius_gain: 1.5    # head radius = head_size * body_radius * this.
+  head_squash: 0.9         # heads are slightly flattened vertically.
+  tail_base_gain: 1.1      # tail base radius, as a multiple of the body radius near the tail.
+  tail_base_offset_ratio: 0.020   # also a fraction of body radius, for the same reason.
+  limb_thickness_ratio: 0.19   # limb radius as a fraction of body radius.
+  fin_span: 2.4            # dorsal fin height at dorsal_fin = 1, in body radii.
+
 # Genetic distance (used for mate compatibility and the speciation test) is computed in
 # standardised trait space: each locus is divided by (high - low) and optionally weighted.
 # Weight 0 excludes a locus from the species concept without excluding it from evolution.
@@ -27,19 +74,119 @@ distance_weights:
     move_persistence: 0.5
 
 loci:
-  # ---- body ---------------------------------------------------------------------------
-  - name: body_size
-    low: 0.05
-    high: 12.0
-    init: 0.40
-    sigma: 0.05
-    doc: "Characteristic length. Mass scales as size^3; almost every cost depends on it."
-  - name: body_slenderness
-    low: 0.5
-    high: 2.5
+  # ---- morphology ---------------------------------------------------------------------
+  # These thirteen genes are the body plan. There is no `body_size` and no `body_slenderness`
+  # locus: volume, surface area, frontal area and slenderness all fall out of the geometry
+  # below, and phenotype.py derives them. A shape gene that the geometry already implies would
+  # be a number the animal's body could contradict.
+  #
+  # Three genes are ratios of body_length rather than absolute lengths. The morphology spike
+  # (spikes/README.md) found that individually reasonable bounds can be jointly absurd -- a
+  # limb length that suits a whale is grotesque on a worm. A ratio cannot be, because it scales
+  # with the body it hangs off. That makes the joint constraint structural rather than checked.
+  #
+  # segment_count, radial_symmetry and limb_pairs are counts, but they are continuous loci like
+  # everything else here; rounding happens where geometry needs it, exactly as offspring_count
+  # is continuous and rounded once at a reproduction event. They get a larger sigma than the
+  # rest (span/25 rather than span/50) because a count gene has flat regions between thresholds
+  # -- limb_pairs 0.1 and 0.4 both mean "no limbs" -- and selection cannot see inside one. The
+  # large-effect mutation (mutation.p_large_effect above) is what actually crosses a threshold
+  # in one step; the wider sigma is what makes drift up to the edge take generations not eons.
+  - name: body_length
+    low: 0.125
+    high: 30.0
     init: 1.0
-    sigma: 0.03
-    doc: "Divides body-support cost (a slender build needs less structure) but reduces storage."
+    sigma: 0.125
+    doc: "Nose-to-tail length, and the scale every other morphology gene is relative to."
+    # These four numbers are the retired `body_size` locus (low 0.05, high 12.0, init 0.40,
+    # sigma 0.05) rescaled so the founder sits at 1.0 -- every one of them divided by 0.4. That
+    # is deliberate: body_length plays exactly the role body_size did, mass still goes as its
+    # cube, and keeping the *relative* range identical means M8 did not quietly change how much
+    # size evolution is allowed to explore while it was changing what a body is.
+    #
+    # The morphology spike used 0.4-6.0, but that range was picked for looking at creatures on
+    # a screen, not for spanning a biosphere: it capped the largest possible animal at ~216x the
+    # founder's mass against the ~27000x this allows. The first thing to notice was a predation
+    # test where the biggest available hunter could no longer eat enough to matter, and the
+    # second was the autotroph size ceiling moving outside the representable range entirely.
+    #
+    # sigma is therefore 12.5% of the founder's length rather than the span/50 the note at the
+    # top of this file suggests, for the reason that note does not cover: for a multiplicative
+    # quantity what matters is the step relative to the *organism*, not to the range.
+  - name: radius_ratio
+    low: 0.04
+    high: 0.60
+    init: 0.50
+    sigma: 0.011
+    doc: "Mid-body radius as a fraction of body_length. Slenderness is 1/(2*this)."
+  - name: fullness
+    low: 0.15
+    high: 1.60
+    init: 0.90
+    sigma: 0.029
+    doc: "Exponent on the radius profile. Low is a near-cylindrical worm, high a spindle."
+  - name: taper
+    low: -1.0
+    high: 1.0
+    init: 0.0
+    sigma: 0.040
+    doc: "Biases bulk fore (+) or aft (-). Costs support: an unbalanced body needs structure."
+  - name: segment_count
+    low: 1.0
+    high: 14.0
+    init: 1.0
+    sigma: 0.52
+    doc: "Somites rippling the body surface. Rounded for geometry; costs support under gravity."
+  - name: segment_depth
+    low: 0.0
+    high: 1.0
+    init: 0.0
+    sigma: 0.020
+    doc: "How pronounced each somite is. Zero means a smooth body whatever segment_count says."
+  - name: radial_symmetry
+    low: 1.0
+    high: 6.0
+    init: 1.0
+    sigma: 0.20
+    doc: "Rounded. 1 means bilateral (a limb pair per side); higher arrays limbs around the axis."
+  - name: limb_pairs
+    low: 0.0
+    high: 6.0
+    init: 0.0
+    sigma: 0.24
+    doc: "Rounded. Limbs cost drag in every medium and earn speed only against a substrate."
+  - name: limb_ratio
+    low: 0.05
+    high: 0.80
+    init: 0.45
+    sigma: 0.015
+    doc: "Limb length as a fraction of body_length. Longer limbs push harder and drag more."
+  - name: limb_splay
+    low: 0.0
+    high: 1.0
+    init: 0.35
+    sigma: 0.020
+    doc: "How far limbs are held from the body axis. Splayed limbs present more frontal area."
+  - name: head_size
+    low: 0.0
+    high: 1.20
+    init: 0.0
+    sigma: 0.024
+    doc: "Head radius as a multiple of body radius. Zero means no distinct head at all."
+  - name: tail_ratio
+    low: 0.0
+    high: 1.20
+    init: 0.0
+    sigma: 0.024
+    doc: "Tail length as a fraction of body_length. Adds volume, surface, and support cost."
+  - name: dorsal_fin
+    low: 0.0
+    high: 1.0
+    init: 0.0
+    sigma: 0.020
+    doc: "Height of a dorsal sheet. Surface area with negligible volume: cheap to grow, costly to heat."
+
+  # ---- body ---------------------------------------------------------------------------
   - name: energy_storage
     low: 0.5
     high: 25.0

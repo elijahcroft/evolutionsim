@@ -5,6 +5,391 @@ and what the next task is.
 
 ---
 
+## Milestone 8 — the morphology genome, and something to look at
+
+**Status: complete.** 418 tests passing. **`mass = body_size ** 3` is gone.** An organism now has
+a body: thirteen loci describe a shape, `phenotype.py` integrates volume, surface area, frontal
+area, limb count and slenderness out of it, those five numbers enter the cost equations, and the
+species panel draws the animal they describe.
+
+ej asked for the M9 creature viewer to land in this milestone rather than the next, so it did.
+
+### The constraint that shaped everything
+
+Every intake and cost coefficient in `energy.yaml` was calibrated across M3, M7 and M7b against a
+founder of mass 0.064. Replacing the scalar body could have invalidated three milestones of tuning
+silently. Two rules prevented it:
+
+1. **`body_density` is a measurement, not a choice.** The founder body integrates to a volume of
+   0.4348114, and the density is 0.064 divided by that. The founder's mass and storage capacity
+   come out unchanged.
+2. **Every new morphology factor evaluates to exactly 1.0 at founder proportions.** New terms are
+   `(1 + coefficient × Δ)` with `Δ = 0` for the founder (one segment, no taper, no limbs);
+   replaced terms are normalised by a reference constant measured off the founder.
+
+`tests/test_energy.py` pins this against literals captured by running the pre-M8 code: every
+`Costs` field, both `Intake` fields, and the speed ceiling, in water and on land. Not one constant
+in `energy.yaml` had to be re-tuned.
+
+### Completed
+
+- **`config/genome.yaml`** — a thirteen-locus morphology group. `body_size` and `body_slenderness`
+  are retired; slenderness is now `1/(2·radius_ratio)`, a consequence of the body's proportions
+  rather than a second gene that could contradict them. Three genes (`radius_ratio`, `limb_ratio`,
+  `tail_ratio`) are ratios of `body_length`, which is the roadmap's structural answer to the
+  spike's finding that individually reasonable bounds can be jointly absurd.
+- **`src/evosim/life/phenotype.py`** — `radius_profile` is the single statement of what a body's
+  outline is, and volume and surface area are frustum sums over it: the volume and area of the
+  mesh the renderer draws, not of an idealised solid it approximates.
+- **`src/evosim/life/energy.py`** — morphology enters through the existing `Costs`/`EnergyModel`
+  seam. No tick-loop changes. Limbs cost drag in every medium and raise the speed ceiling only on
+  land; segments and taper cost support; real surface area replaced `m^0.67` in thermoregulation
+  and armor upkeep.
+- **The creature viewer** — `buildCreature` ported from `spikes/morphology/` into
+  `src/evosim/ui/index.html`. Colour comes from the species' mean diet rather than the spike's
+  `hue` gene, so what an animal looks like tells you how it makes a living and costs the genome
+  nothing. The UI and the phenotype read the same shape constants from `/api/meta`.
+
+### Three things the tests caught that the plan had wrong
+
+1. **Multiplying `mass × cross_section` in the locomotion cost double-counts size.** The equation
+   is already proportional to mass, and frontal area grows with size too, so a body six times the
+   founder's length was billed roughly fifty times over to move. It surfaced as a predation test
+   where the largest available hunter could no longer turn a profit. The fix is to divide frontal
+   area by `volume^(2/3)`: what remains is *bluntness*, which is exactly the thing shape should
+   change, and size goes on being paid for once.
+2. **An absolute radius floor breaks geometric similarity.** `min_radius` as a fixed length is most
+   of a small animal and nothing to a large one, so doubling every gene stopped doubling the
+   animal. Caught by a test asserting volume scales as length cubed. It is now a fraction of the
+   body's own radius — the same reasoning that made three of the genes ratios in the first place.
+3. **33 profile samples cannot resolve a 14-segment body.** Nyquist, not taste. Against an
+   8193-sample reference over 2000 random bodies, 33 samples were wrong by up to 1.6% in volume and
+   **17% in surface area**, concentrated entirely on the most segmented animals. At 129 the worst
+   case is 0.22% and 1.4%. A comment claiming 1e-4 accuracy was written before this was measured
+   and was simply false.
+
+### The genome grew from 28 loci to 39, and that moved the species concept
+
+Genetic distance is a weight-normalised RMS over loci, so eleven net new loci dilute every existing
+locus's contribution. `tools/speciation_experiment.py` measures the consequence:
+
+| | between-lineage | within p99 | separable |
+| --- | --- | --- | --- |
+| M7b (28 loci) | 0.0619 | 0.0459 | yes |
+| M8 (39 loci) | 0.0363 | 0.0275 | yes |
+
+Separability — the criterion M6 wrote — still holds, and a 3,650-day reference run still produces
+**two species**. But `mate_compatibility_distance: 0.05` no longer sits in the window between p99
+and the between-lineage gap, where M7b deliberately placed it.
+
+**It was left at 0.05 anyway, and that is a deliberate departure from M7b's own method.** Re-tuning
+it to 0.032 — inside the new measured window — was tried: the run produced *three* species of which
+*two went extinct*, ending with one, against 0.05's two stable species. The heuristic and the
+outcome disagree, and the outcome is the better evidence. Recorded here rather than quietly fixed,
+because the next person to touch that constant deserves both numbers.
+
+### Consequences and known limitations
+
+- **Two species at 4,000 days still look nearly alike.** The machinery works end to end — a
+  synthetic evolved genome renders with head, tail, dorsal fin, six limbs and visible segments —
+  but real morphological divergence is slow. Over 3,650 days the two species do separate
+  (`radial_symmetry` 1.10 vs 2.48, and species 1 is less segmented with more dorsal fin), and body
+  length fell from 1.0 to ~0.69 under support cost. It reads in the numbers before it reads in the
+  silhouette. Whether to accelerate that is a tuning question for M9+, not a defect.
+- **`radial_symmetry` is a neutral locus whenever `limb_pairs` rounds to zero**, because it only
+  enters the model through limb count. Its drift to 2.48 in species 1 is drift, not selection.
+- **Intake still scales as `m^0.67` rather than on real surface area.** Heat loss uses the true
+  area and light capture does not, which is inconsistent. Moving it re-opens `k_photo` and
+  `k_detritus`, calibrated in M3 and M7b, so it was deliberately deferred. First thing to revisit.
+- **Limbs have not evolved on the reference planet** — `limb_pairs` drifts to ~0.18, below the
+  rounding threshold. There is a flat region between thresholds that selection cannot see inside;
+  the large-effect mutation is what would cross it.
+- Per-tick performance is unchanged (geometry is not in the tick loop). Seeding 40,000 organisms
+  went from 95 ms to 468 ms, and per-organism memory grew by five float32 arrays.
+
+### Next task — Milestone 10: the organism inspector
+
+M9's viewer landed early, so the next unbuilt milestone is the organism inspector: open one
+individual and read its own energy ledger, so a starving organism's death can be explained from its
+own panel. `PhenotypeBatch.organism_dict` already serialises the body; what is missing is the
+per-organism cost breakdown, which currently exists only as population totals.
+
+---
+
+## Milestone 7b — a second way to make a living
+
+**Status: complete.** 406 tests passing. **A default run now produces a species by itself.**
+That has never happened before in this project.
+
+M7 built the depth axis and measured that it produced zonation without differentiation: life
+stopped at 2 km and its diet was identical at every depth it reached. This milestone found out
+why, and the answer was not where M7 was looking.
+
+### The root cause: detritivory was never possible anywhere
+
+Before touching the thermocline, a direct measurement of what each strategy earns. A pure
+detritivore, at every detritus level, on the reference planet:
+
+| detritus | detritivore intake | its costs | net |
+| --- | --- | --- | --- |
+| 0.30 | 0.0023 | 0.0046 | −0.0023 |
+| 1.00 | 0.0032 | 0.0046 | −0.0014 |
+| 10.0 | 0.0038 | 0.0046 | −0.0008 |
+
+Detritivory intake is `k_detritus × sat(detritus) × …`, and the saturation term cannot exceed 1,
+so `k_detritus = 0.060` capped a detritivore's best possible intake below the cost of existing.
+**It was net-negative at every detritus level, on every planet, forever.** No environment could
+have rewarded it. The dark ocean could not have become a niche however much dead biomass fell
+into it, and M7's marine snow was delivering food to organisms structurally unable to eat it.
+
+`k_photo` was calibrated in M3 and `k_detritus` never was — it was still the M0 guess. Fixing
+that is not tuning toward a desired result; it is the same calibration autotrophy already got.
+
+### Completed
+
+- **`k_detritus` calibrated 0.060 → 0.300.** Chosen so the two strategies each win their own
+  zone rather than one dominating: on a lit shelf an autotroph nets +0.0130 against a
+  detritivore's +0.0069, so detritivory is a viable but clearly worse living where there is sun;
+  in the dark deep the autotroph is firmly negative and the detritivore is positive. 0.45 would
+  make detritivory as good as autotrophy on the shelf too, erasing the zonation instead of
+  creating it. A test pins the whole table.
+
+- **A thermocline.** Water temperature falls from its surface equilibrium toward
+  `deep_temperature_c` asymptotically over `thermocline_scale_km`, symmetric with the elevation
+  lapse rate already in `equilibrium_temperature`. Worth recording that it does not simply make
+  the deep colder — it *warms* a polar basin toward 4 °C as surely as it cools a tropical one,
+  which is what makes the abyss one connected habitat rather than a cold rim. It buys two
+  things: detritus decays more slowly where it lands (through the Q10 term already in
+  `resources`), and a deep lineage has a genuinely different thermal optimum to adapt toward.
+
+- **`mate_compatibility_distance` 0.15 → 0.05** — the first value in `energy.yaml` chosen
+  against a measurement rather than a guess. See below for why that became possible.
+
+### The window reopened, and that is the whole result
+
+M6's decisive finding was that no threshold could work: measured over two *completely isolated*
+lineages, the gap between them fell **below** the 99th percentile of ordinary within-population
+distance, in every variant tried. Any threshold low enough to separate real lineages would also
+shred an undivided population. That is no longer true.
+
+| variant | between | within | p99 | S/N | separable? | M6 → M7 → now |
+| --- | --- | --- | --- | --- | --- | --- |
+| reference | 0.0619 | 0.0216 | 0.0459 | **2.86** | **yes** | 1.62 → 1.65 → 2.86 |
+
+Between-lineage 0.0619 against a within-population p99 of 0.0459 — signal above noise, with
+room between them. `0.05` sits in that room.
+
+The other four variants got *worse* (mutation ×10 fell 2.13 → 1.06, thermal species concept
+4.16 → 0.97). Each is a single seed-pair, so this is noisy, but the direction is consistent with
+the reference no longer needing help: the variants existed to compensate for a signal that was
+not there, and they now perturb one that is.
+
+### And then the thing this project exists for
+
+Default configuration, 3,000 days, three seeds:
+
+| seed | species | the split |
+| --- | --- | --- |
+| 42 | **2** | #1 born day 900 from #0; n=9,933; `temp_optimum` 19.27 against the parent's 20.11 |
+| 7 | **2** | #1 born day 1,200 from #0; n=5,259; `temp_optimum` **21.30 against the parent's 14.15** |
+| 1234 | 1 | no split |
+
+Seed 7's pair differs by 7.15 °C of thermal optimum. Both daughter populations are in the
+thousands — not the slivers a too-low threshold produces. For comparison, forcing splits with a
+threshold of 0.02 gives species of 628, 5, 1 and 5 organisms with overlapping ranges, which is
+what noise looks like when you cut it.
+
+The deep is also populated now, and adapted: up to 10,882 organisms below 1.5 km on a 4,000-day
+run, carrying a `temp_optimum` 3–7 °C colder than the shallow population.
+
+### Consequences and known limitations
+
+- **One seed in three still does not speciate.** Two of three is not "the reference planet
+  speciates"; it is "the reference planet can". Whether seed 1234's terrain lacks a deep basin
+  large enough to hold a separate population is not yet measured.
+- **`mate_compatibility_distance` does two jobs** — who may breed, and what counts as a species.
+  Lowering it made mating more assortative as well as the species concept finer, and those two
+  effects are not separated by any measurement here. The split may be partly caused by the
+  reproductive isolation the same number imposes, which is defensible biology but should be
+  stated rather than assumed.
+- **The M7b splits are thermal, not trophic.** `aff_detritus` differs between the new species by
+  about 0.01 — nothing. The deep is now livable and colder-adapted, but the split that actually
+  fires is along temperature, which was already the most selectable locus. A genuinely trophic
+  split is still unobserved.
+- **Every experiment variant is one seed-pair.** The reference S/N of 2.86 is a single
+  measurement, not a distribution. The five-variant table should be a sweep before any of these
+  numbers is trusted to two significant figures.
+- **`temp_optimum` selection changed character.** The trait now converges on the temperature of
+  the water its lineage occupies (from 22.0 it reaches 15.81 against water at 15.66) rather than
+  lagging it by several degrees. Two M4 tests were rewritten around measured fixed points; the
+  claim they make is unchanged and the signal is stronger than before.
+- Runs still pin against `sim.max_population` (40,000), and throttling distorts the selection
+  these runs exist to measure. Unchanged from M7 and still unaddressed.
+- Throughput 928,107 organisms/s (30.8 ms/tick), up from M7's 679,408 — fewer organisms survive
+  the founder period on the recalibrated planet, so more of the budget goes to fewer rows.
+
+### Next task — Milestone 8: the morphology genome
+
+Unchanged from [docs/ROADMAP.md](docs/ROADMAP.md). The engine detour is over: there is now more
+than one species to look at, which is what M8–M15 assumed and M7 could not supply.
+
+The two loose ends worth carrying forward, neither blocking: seed 1234 (why does one planet in
+three stay single?), and the absence of a trophic split (the deep is livable and nothing has yet
+specialised into eating what falls into it).
+
+---
+
+## Milestone 7 — depth and light
+
+**Status: complete.** 402 tests passing. This is the first milestone of the
+[roadmap rewrite](docs/ROADMAP.md); the original M7 (god tools) is dropped.
+
+M6 ended by measuring that the reference planet offers exactly one way to make a living, and
+named the ocean-depth axis as the fix. This milestone builds that axis. It half worked, and the
+half that did not is the more useful result.
+
+### Completed
+
+- **The ocean has a floor and the light has to reach it.** `World.depth_km` is the water column
+  above a cell; `World.transmittance` is `exp(-attenuation × depth_km)`, computed once because
+  bathymetry does not change; `World.light` is surface insolation times that, recomputed each
+  tick because the season is what changes. `EnergyModel.photosynthesis` reads `light` and
+  nothing else does — so below the photic depth autotrophy is not a poor living but an
+  impossible one, however bright the day is on the waves above.
+
+- **Pressure is the water column, not a planetary constant.** Until now the mismatch term was
+  `|planet.pressure − 1|`, which on a 1 atm planet is identically zero for every organism
+  everywhere: `pressure_tolerance` was a locus that could only drift. It is now
+  `|pressure + pressure_per_km_depth × depth − 1|`, so the deep costs something specific to
+  occupy and tolerance buys something specific back. A test pins that the surface is free and
+  the abyss is not.
+
+- **Marine snow.** Each tick a water cell sends `detritus_sink_fraction` of its detritus to its
+  deepest water neighbour, routed through a static table resolved at world creation. Written as
+  a subtraction and a `bincount` of the same quantities, so the pool is conserved to the last
+  float — asserted over 50 consecutive sinks. Without this the dark ocean is not a niche but a
+  dead zone, since no light means no autotrophs means no corpses.
+
+- **Founders are seeded by area × light, not area alone.** Seeding an autotroph uniformly across
+  an ocean that is dark below the shelf drowns most of the initial population in the first few
+  ticks and calls it selection. On a planet with no attenuation every transmittance is 1 and the
+  term does nothing, so no existing world changed behaviour.
+
+- **`k_photo` recalibrated 0.30 → 0.45.** Attenuation removed roughly a third of the ocean's
+  usable energy and day-one net energy on the reference planet went to −0.23. The constant did
+  not move because the organisms changed; it moved because the planet got darker. +1.77 now,
+  against +1.60 before the water column absorbed anything.
+
+- **You can see it.** Two new map layers (`Water depth`, `Light (at depth)`) beside the existing
+  surface `Insolation`, and `tools/render_world.py` grew to eight panels. Putting insolation and
+  light side by side is the fastest way to see why life sits where it does.
+
+### The finding: a light gradient produces zonation, not differentiation
+
+Life settles across the top 2 km of ocean and stops dead. 700 ticks, reference planet:
+
+| depth band | share of population | share of ocean cells | mean `aff_autotroph` | mean `aff_detritus` |
+| --- | --- | --- | --- | --- |
+| 0–0.5 km | 48.7% | 22.0% | 0.813 | 0.107 |
+| 0.5–1 km | 20.7% | 19.3% | 0.813 | 0.107 |
+| 1–2 km | 5.3% | 24.8% | 0.814 | 0.106 |
+| 2–3 km | 0.005% | 15.5% | 0.817 | 0.105 |
+| 3–6 km | 0% | 18.3% | — | — |
+
+- **The habitat boundary is real and sharp.** A third of the sea floor is now uninhabited, and
+  the gradient is not a tuning artefact: life tracks light across every configuration tried.
+- **The diet is identical at every depth it reaches.** 0.813 autotroph at the surface, 0.814 at
+  2 km. This is the number that matters and it is flat. The deep is a place life cannot go, not
+  a place a different kind of life goes.
+- **Food supply is not the constraint.** Dropping `detritus_decay_rate` from 0.01 to 0.0005
+  raised standing detritus below 2.5 km by 35× and moved deep occupancy not at all — from 0.000
+  to 0.000. Something else keeps organisms out.
+- **What that something is: the fitness gradient never points down.** An autotroph that steps
+  deeper loses intake immediately, so no lineage lingers where detritivory would pay, so
+  detritivory is never selected for, so nothing can live deeper. It is an adaptive valley, and
+  it is exactly the shape of problem that a light gradient alone cannot solve — the reward for
+  crossing sits on the far side of a cost the crossing organism pays first.
+
+### Against M6's acceptance criterion: measurably better, still not there
+
+`tools/speciation_experiment.py`, 2,000 days per lineage (M6's table was 3,000, so the
+comparison is directional rather than exact):
+
+| variant | between | within | p99 | S/N | separable? | vs M6 |
+| --- | --- | --- | --- | --- | --- | --- |
+| reference | 0.0332 | 0.0201 | 0.0371 | 1.65 | no | 1.62 → 1.65 |
+| mutation ×10 | 0.0561 | 0.0264 | 0.0482 | 2.13 | **yes** | was no |
+| mutation ×50 | 0.0420 | 0.0526 | 0.0975 | 0.80 | no | worse |
+| wide thermal sigma | 0.0398 | 0.0202 | 0.0458 | 1.97 | no | 1.51 → 1.97 |
+| thermal species concept | 0.0888 | 0.0214 | 0.0654 | 4.16 | **yes** | 2.05 → 4.16 |
+
+- **Two variants became separable where none were before**, and the best S/N doubled. Isolated
+  lineages genuinely are further apart than they were. M7 moved the needle.
+- **No variant reaches the mating threshold.** The largest between-lineage distance is 0.089
+  against a `mate_compatibility_distance` of 0.15, so `TaxonomyModel.split` would refuse every
+  one of these splits. The reference configuration is still `separable: no`.
+- **And the direct test agrees.** Three seeds (42, 7, 1234), 4,000 days each on the default
+  planet: `species_ever = 1` in every one. Nothing split. Life ended up confined to the top
+  1.2–1.8 km of ocean (95th percentile of occupied depth), with the land-dwelling share ranging
+  from 26% to 63% depending on how the terrain came out.
+- So the milestone's own criterion — *`separable: yes` for the reference, and then a run that
+  produces a second species without being told to* — **is not met**. What was bought is a
+  measurable improvement and a precise diagnosis of what is still missing.
+
+### Consequences and known limitations
+
+- **Life moved toward land.** Water lost a third of its light and land lost none, so the
+  land-dwelling share of the population rose from about 4% to about 25%. That is a real
+  consequence of a more honest light model, not a bug, but it does change the character of the
+  reference planet and every M4–M6 number was measured on the old one.
+- **Organisms are benthic by assumption.** A single-layer world has no surface ocean, so every
+  marine organism lives on the floor and reads the floor's light. Real marine primary production
+  happens in the top 200 m regardless of how deep the floor is. This is the modelling
+  compromise the whole milestone rests on, and `light_attenuation_per_km: 0.75` was chosen by
+  measurement rather than physics — Earth's value is nearer 23, which would leave a shelf of a
+  couple of percent of cells.
+- **Deep water is not cold.** There is no thermocline: a 6 km cell is the same temperature as
+  the surface above it. This costs two things — detritus decays as fast in the abyss as in the
+  shallows, and the deep is denied the one selective gradient (temperature) the model already
+  knows how to act on.
+- **`test_a_mismatched_thermal_optimum_climbs_toward_its_habitat` needed 900 ticks, not 400.**
+  M4's directional-selection signal on `temp_optimum` survived but weakened, because confining
+  the lineage to the shelf both narrows the temperatures it can sample and puts a stronger
+  pressure beside the thermal one. Measured from a founder at 20.0: 19.91 at 400 ticks, 20.76 at
+  900, 20.55 at 1600. The effect is real, slower, and noisier than the old threshold assumed.
+- **One test was fragile and is now correct rather than lucky.**
+  `test_a_throttled_birth_is_not_charged_to_its_parent` asserted `births <= room` measured before
+  the step; the reap runs before the breed, so this tick's dead legitimately free slots first. It
+  passed only while that tick happened to have no deaths.
+- **Long runs still pin against `sim.max_population`.** All three 4,000-day seeds finished at
+  the 40,000 cap, and capacity throttling distorts exactly the selection these runs exist to
+  measure. That predates M7 and M7 did not help: a more productive `k_photo` reaches the ceiling
+  sooner.
+- Throughput 679,408 organisms/s (47.6 ms/tick at 40k), against M6's numbers — the two new world
+  fields are static or one multiply, and the sink is one gather and one `bincount`.
+- Every M1–M6 limitation still stands.
+
+### Next task — Milestone 8: the morphology genome
+
+[docs/ROADMAP.md](docs/ROADMAP.md) puts bodies next, and that is still the right call: it is the
+backbone of everything the roadmap promises after it, and the spike in `spikes/morphology/` has
+already de-risked it.
+
+But M7 leaves a specific, cheap, well-diagnosed piece of unfinished business that should be
+picked up before or alongside it: **the deep needs a reason to be worth crossing into.** The
+adaptive valley above is the whole problem, and the most promising lever is the one M7 declined
+to build — a thermocline. Deep water being cold is physically true, costs one term in
+`equilibrium_temperature` symmetric with the lapse rate already there, and buys three things at
+once: detritus that decays slowly enough to accumulate where it lands, a genuine second thermal
+optimum for a lineage to adapt to, and a reason for `temp_optimum` and `pressure_tolerance` to
+move together into a recognisably different animal.
+
+Verified by: the diet table above stops being flat — mean `aff_detritus` measurably higher below
+2 km than above it — and then `speciation_experiment.py` reporting `separable: yes` for the
+*reference* variant, not only for two hand-tuned ones.
+
+---
+
 ## Milestone 6 — the run you can read
 
 **Status: complete.** 393 tests passing.

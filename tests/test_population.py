@@ -74,7 +74,16 @@ def test_founder_cells_respect_configured_habitat(config: Config, habitat: str):
         assert np.all(world.terrain.land.ravel()[cells])
 
 
-def test_founder_sampling_probabilities_are_physical_cell_areas(config: Config):
+def test_founder_sampling_probabilities_weight_cell_area_by_available_light(
+    config: Config,
+):
+    """Founders land where there is area to land on and light to live by, in proportion.
+
+    Area alone would put as many founders on a tiny polar cell as on a wide equatorial one;
+    area alone on a planet with a dark abyss would put most of them somewhere an autotroph
+    cannot earn a single unit of energy.
+    """
+
     configured = replace(config, sim=replace(config.sim, initial_population=4))
     world, _ = _world(configured)
 
@@ -96,7 +105,10 @@ def test_founder_sampling_probabilities_are_physical_cell_areas(config: Config):
     rng = InitOnlyBundle()
     Population.seed_founders(configured, world, rng)  # type: ignore[arg-type]
     valid = np.flatnonzero(world.terrain.water.ravel())
-    expected = world.grid.cell_area_weights.ravel()[valid]
+    expected = (
+        world.grid.cell_area_weights.ravel()[valid]
+        * world.transmittance.ravel()[valid]
+    )
     expected /= expected.sum()
 
     assert np.array_equal(rng.init.options, valid)
@@ -159,8 +171,8 @@ def test_add_and_remove_keep_every_array_aligned(config: Config):
     sim = replace(config.sim, max_population=5, initial_population=1)
     population = Population.empty(sim, config.genome, world)
     genomes = population.schema.founders(3)
-    genomes[:, config.genome.index_of("body_size"), :] = np.array(
-        [[0.2], [0.4], [0.8]], dtype=np.float32
+    genomes[:, config.genome.index_of("body_length"), :] = np.array(
+        [[0.5], [1.0], [2.0]], dtype=np.float32
     )
 
     ids = population.add(
@@ -181,7 +193,7 @@ def test_add_and_remove_keep_every_array_aligned(config: Config):
     assert np.array_equal(population.age[:2], [4, 6])
     assert np.array_equal(population.generation[:2], [0, 2])
     assert np.allclose(
-        population.phenotypes.trait("body_size", population.active), [0.2, 0.8]
+        population.phenotypes.trait("body_length", population.active), [0.5, 2.0]
     )
     assert np.all(population.organism_id[2:3] == -1)
 
@@ -210,7 +222,7 @@ def test_capacity_overflow_is_atomic_and_explicit(config: Config):
 
 def test_derived_phenotype_failure_leaves_population_untouched(config: Config):
     world, _ = _world(config)
-    body_index = config.genome.index_of("body_size")
+    body_index = config.genome.index_of("body_length")
     loci = list(config.genome.loci)
     loci[body_index] = replace(loci[body_index], high=1e20)
     oversized_body_config = replace(config.genome, loci=tuple(loci))
@@ -286,7 +298,7 @@ def test_organism_serialization_is_a_renderer_friendly_dict(config: Config):
     assert organism["id"] == 0
     assert organism["cell"] >= 0
     assert set(organism["genome"]) == {locus.name for locus in config.genome.loci}
-    assert len(organism["genome"]["body_size"]) == 2
+    assert len(organism["genome"]["body_length"]) == 2
     assert isinstance(organism["phenotype"], dict)
     assert organism["phenotype"]["body"]["mass"] > 0.0
     assert organism["phenotype"]["diet"]["autotroph"] > 0.5

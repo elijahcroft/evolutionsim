@@ -243,6 +243,9 @@ class ClimateConfig:
     moisture_ocean: float
     moisture_decay_per_cell: float
     moisture_min: float
+    light_attenuation_per_km: float
+    deep_temperature_c: float
+    thermocline_scale_km: float
 
     @classmethod
     def from_reader(cls, r: _Reader) -> ClimateConfig:
@@ -256,6 +259,10 @@ class ClimateConfig:
             moisture_ocean=r.num("moisture_ocean", low=0.0, high=1.0),
             moisture_decay_per_cell=r.num("moisture_decay_per_cell", low=0.0, high=1.0),
             moisture_min=r.num("moisture_min", low=0.0, high=1.0),
+            light_attenuation_per_km=r.num("light_attenuation_per_km", low=0.0),
+            deep_temperature_c=r.num("deep_temperature_c"),
+            # 0 would divide by zero in the thermocline profile, not merely disable it.
+            thermocline_scale_km=r.num("thermocline_scale_km", low=1e-3),
         )
         r.done()
         if cfg.moisture_min > cfg.moisture_ocean:
@@ -275,6 +282,7 @@ class ResourceConfig:
     detritus_decay_rate: float
     detritus_decay_q10: float
     detritus_reference_temp_c: float
+    detritus_sink_fraction: float
 
     @classmethod
     def from_reader(cls, r: _Reader) -> ResourceConfig:
@@ -287,6 +295,7 @@ class ResourceConfig:
             detritus_decay_rate=r.num("detritus_decay_rate", low=0.0, high=1.0),
             detritus_decay_q10=r.num("detritus_decay_q10", low=1.0),
             detritus_reference_temp_c=r.num("detritus_reference_temp_c"),
+            detritus_sink_fraction=r.num("detritus_sink_fraction", low=0.0, high=1.0),
         )
         r.done()
         return cfg
@@ -301,6 +310,7 @@ class PlanetConfig:
     o2_fraction: float
     o2_reference: float
     pressure: float
+    pressure_per_km_depth: float
     solar_constant: float
     radiation: float
     axial_tilt: float
@@ -329,6 +339,7 @@ class PlanetConfig:
             o2_fraction=r.num("o2_fraction", low=0.0, high=1.0),
             o2_reference=r.num("o2_reference", low=1e-4, high=1.0),
             pressure=r.num("pressure", low=1e-3, high=100.0),
+            pressure_per_km_depth=r.num("pressure_per_km_depth", low=0.0, high=100.0),
             solar_constant=r.num("solar_constant", low=0.0, high=10.0),
             radiation=r.num("radiation", low=0.0, high=100.0),
             axial_tilt=r.num("axial_tilt", low=0.0, high=90.0),
@@ -381,9 +392,57 @@ class MutationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class MorphologyConfig:
+    """Constants that fix what the morphology loci *mean* geometrically.
+
+    These are not tuning dials in the sense the energy coefficients are -- they are the
+    definition of the body shape a genome describes, shared verbatim by the phenotype's volume
+    integral and the renderer's mesh. They live here rather than as literals in ``phenotype.py``
+    because they change body size, body size changes every cost, and no number that changes a
+    cost may be a literal in simulation code.
+    """
+
+    profile_samples: int
+    body_density: float
+    min_radius_ratio: float
+    taper_gain: float
+    segment_relief: float
+    head_radius_gain: float
+    head_squash: float
+    tail_base_gain: float
+    tail_base_offset_ratio: float
+    limb_thickness_ratio: float
+    fin_span: float
+
+    @classmethod
+    def from_reader(cls, r: _Reader) -> MorphologyConfig:
+        cfg = cls(
+            profile_samples=r.integer("profile_samples", low=5),
+            body_density=r.num("body_density", low=0.0),
+            min_radius_ratio=r.num("min_radius_ratio", low=0.0),
+            taper_gain=r.num("taper_gain", low=0.0),
+            segment_relief=r.num("segment_relief", low=0.0, high=1.0),
+            head_radius_gain=r.num("head_radius_gain", low=0.0),
+            head_squash=r.num("head_squash", low=0.0),
+            tail_base_gain=r.num("tail_base_gain", low=0.0),
+            tail_base_offset_ratio=r.num("tail_base_offset_ratio", low=0.0),
+            limb_thickness_ratio=r.num("limb_thickness_ratio", low=0.0),
+            fin_span=r.num("fin_span", low=0.0),
+        )
+        r.done()
+        if cfg.body_density <= 0.0:
+            raise ConfigError(
+                "genome.morphology.body_density must be > 0; a massless body would have zero "
+                f"basal cost and infinite everything else, got {cfg.body_density}"
+            )
+        return cfg
+
+
+@dataclass(frozen=True, slots=True)
 class GenomeConfig:
     loci: tuple[LocusSpec, ...]
     mutation: MutationConfig
+    morphology: MorphologyConfig
     # Weight of each locus in the standardised genetic-distance metric used for mate
     # compatibility and the speciation split test. Weight 0 excludes a locus from the species
     # concept without excluding it from evolution.
@@ -427,6 +486,7 @@ class GenomeConfig:
     def from_mapping(cls, data: Any) -> GenomeConfig:
         r = _Reader(data, "genome")
         mutation = MutationConfig.from_reader(r.section("mutation"))
+        morphology = MorphologyConfig.from_reader(r.section("morphology"))
         weights_reader = r.section("distance_weights")
         default_weight = weights_reader.num("default", low=0.0)
         weight_overrides = weights_reader.raw_mapping("overrides", default={})
@@ -507,13 +567,16 @@ class GenomeConfig:
             loci.append(spec)
 
         loci_by_name = {spec.name: spec for spec in loci}
-        for name in ("body_size", "energy_storage", "radiation_tolerance"):
+        for name in ("body_length", "energy_storage", "radiation_tolerance"):
             spec = loci_by_name.get(name)
             if spec is not None and spec.low < 0.0:
                 raise ConfigError(f"genome.loci.{name}.low must be >= 0")
-        slenderness = loci_by_name.get("body_slenderness")
-        if slenderness is not None and slenderness.low <= 0.0:
-            raise ConfigError("genome.loci.body_slenderness.low must be > 0")
+        # Slenderness is 1/(2*radius_ratio) and body radius is radius_ratio*body_length, so a
+        # radius_ratio that can reach zero produces a body with no width, infinite slenderness,
+        # and a division by zero in the support cost.
+        radius_ratio = loci_by_name.get("radius_ratio")
+        if radius_ratio is not None and radius_ratio.low <= 0.0:
+            raise ConfigError("genome.loci.radius_ratio.low must be > 0")
         mutation_rate = loci_by_name.get("mutation_rate")
         if mutation_rate is not None and (
             mutation_rate.low < 0.0 or mutation_rate.high > 1.0
@@ -522,27 +585,42 @@ class GenomeConfig:
                 "genome.loci.mutation_rate bounds must lie within [0, 1] because it is "
                 "a probability"
             )
-        body_size = loci_by_name.get("body_size")
+        body_length = loci_by_name.get("body_length")
         energy_storage = loci_by_name.get("energy_storage")
-        if body_size is not None:
-            body_high = np.float32(body_size.high)
+        tail_ratio = loci_by_name.get("tail_ratio")
+        if body_length is not None and radius_ratio is not None:
+            # A loose upper bound on body volume, not the real integral: the largest possible
+            # body is at most a cylinder of the maximum radius running the full length plus a
+            # maximum tail. Phenotype expression computes the true, smaller value; this only has
+            # to be large enough that anything it admits cannot overflow downstream.
+            length_high = np.float32(body_length.high)
+            radius_high = np.float32(radius_ratio.high * body_length.high)
+            tail_high = np.float32(0.0 if tail_ratio is None else tail_ratio.high)
             with np.errstate(over="ignore", invalid="ignore"):
-                maximum_mass = np.float32(body_high * body_high * body_high)
-            if not np.isfinite(maximum_mass):
-                raise ConfigError(
-                    "genome.loci.body_size.high produces body mass outside finite "
-                    "float32 range"
+                maximum_volume = np.float32(
+                    np.float32(np.pi)
+                    * radius_high
+                    * radius_high
+                    * length_high
+                    * (np.float32(1.0) + tail_high)
                 )
-            if energy_storage is not None and slenderness is not None:
+            if not np.isfinite(maximum_volume):
+                raise ConfigError(
+                    "genome.loci.body_length and radius_ratio bounds produce body volume "
+                    "outside finite float32 range"
+                )
+            if energy_storage is not None:
+                # Storage is mass * energy_storage / slenderness, and slenderness is
+                # 1/(2*radius_ratio), so the smallest divisor comes from the widest body.
                 with np.errstate(over="ignore", invalid="ignore"):
                     maximum_storage = np.float32(
-                        maximum_mass
+                        maximum_volume
                         * np.float32(energy_storage.high)
-                        / np.float32(slenderness.low)
+                        * np.float32(2.0 * radius_ratio.high)
                     )
                 if not np.isfinite(maximum_storage):
                     raise ConfigError(
-                        "body_size, energy_storage, and body_slenderness bounds produce "
+                        "body_length, radius_ratio, and energy_storage bounds produce "
                         "storage capacity outside finite float32 range"
                     )
 
@@ -591,6 +669,7 @@ class GenomeConfig:
         return cls(
             loci=tuple(loci),
             mutation=mutation,
+            morphology=morphology,
             distance_weight=tuple(weights),
             _index={spec.name: i for i, spec in enumerate(loci)},
         )
@@ -615,16 +694,21 @@ class CostConfig:
     upkeep_radiation_tolerance: float
     upkeep_longevity: float
     k_support: float
+    support_segment_cost: float
+    support_taper_cost: float
     k_move: float
     move_gravity_exponent: float
     drag_water: float
     drag_land: float
+    drag_shape_reference: float
+    limb_drag_cost: float
+    limb_thrust: float
     pressure_buoyancy: float
     k_sense: float
     sense_range_exponent: float
     sense_mass_exponent: float
     k_thermo: float
-    thermo_mass_exponent: float
+    thermo_area_reference: float
     k_armor: float
 
     @classmethod
@@ -639,19 +723,28 @@ class CostConfig:
             upkeep_radiation_tolerance=r.num("upkeep_radiation_tolerance", low=0.0),
             upkeep_longevity=r.num("upkeep_longevity", low=0.0),
             k_support=r.num("k_support", low=0.0),
+            support_segment_cost=r.num("support_segment_cost", low=0.0),
+            support_taper_cost=r.num("support_taper_cost", low=0.0),
             k_move=r.num("k_move", low=0.0),
             move_gravity_exponent=r.num("move_gravity_exponent", low=0.0, high=2.0),
             drag_water=r.num("drag_water", low=0.0),
             drag_land=r.num("drag_land", low=0.0),
+            drag_shape_reference=r.num("drag_shape_reference", low=0.0),
+            limb_drag_cost=r.num("limb_drag_cost", low=0.0),
+            limb_thrust=r.num("limb_thrust", low=0.0),
             pressure_buoyancy=r.num("pressure_buoyancy", low=0.0),
             k_sense=r.num("k_sense", low=0.0),
             sense_range_exponent=r.num("sense_range_exponent", low=0.0, high=4.0),
             sense_mass_exponent=r.num("sense_mass_exponent", low=0.0, high=2.0),
             k_thermo=r.num("k_thermo", low=0.0),
-            thermo_mass_exponent=r.num("thermo_mass_exponent", low=0.0, high=2.0),
+            thermo_area_reference=r.num("thermo_area_reference", low=0.0),
             k_armor=r.num("k_armor", low=0.0),
         )
         r.done()
+        if cfg.drag_shape_reference <= 0.0:
+            raise ConfigError("energy.costs.drag_shape_reference must be > 0")
+        if cfg.thermo_area_reference <= 0.0:
+            raise ConfigError("energy.costs.thermo_area_reference must be > 0")
         return cfg
 
 
@@ -864,7 +957,7 @@ def apply_override(raw: dict[str, Any], override: str) -> None:
     override that does not correspond to an existing key is a typo, and silently accepting it
     would mean the sweep you thought you ran never varied anything.
 
-    Locus fields are addressable by name, e.g. `genome.loci.body_size.sigma=0.1`, because
+    Locus fields are addressable by name, e.g. `genome.loci.body_length.sigma=0.1`, because
     `loci` is a YAML list and index-based paths would be unreadable and fragile.
     """
     if "=" not in override:

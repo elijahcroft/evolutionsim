@@ -22,7 +22,7 @@ def test_schema_caches_an_immutable_config_view(schema: GenomeSchema):
 
     assert schema.names == tuple(locus.name for locus in config.loci)
     assert schema.n_loci == config.n_loci
-    assert schema.index_of("body_size") == config.index_of("body_size")
+    assert schema.index_of("body_length") == config.index_of("body_length")
     assert schema.bounds.shape == (config.n_loci, 2)
     assert schema.low.dtype == np.float32
     assert np.array_equal(schema.init, config.init_array())
@@ -117,7 +117,7 @@ def test_genetic_distance_is_weighted_standardised_rms(
 ):
     left = schema.founders(2)
     right = schema.founders(2)
-    locus = schema.index_of("body_size")
+    locus = schema.index_of("body_length")
     left[0, locus, :] = schema.low[locus]
     right[0, locus, :] = schema.high[locus]
 
@@ -255,7 +255,7 @@ def test_radiation_tolerance_reduces_radiation_induced_mutation(
 
 def test_zero_sigma_remains_stable_under_extreme_large_effect_scale():
     config = Config.load().genome
-    body_index = config.index_of("body_size")
+    body_index = config.index_of("body_length")
     loci = list(config.loci)
     loci[body_index] = replace(loci[body_index], sigma=0.0)
     mutation = replace(

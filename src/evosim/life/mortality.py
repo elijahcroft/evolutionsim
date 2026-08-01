@@ -108,10 +108,17 @@ class MortalityModel:
             config.h_toxicity_max,
             config.toxicity_scale * environment.toxicity,
         )
+        # Pressure is the water column overhead, not a planetary constant: without depth the
+        # mismatch term is identically zero on a 1 atm world and the locus cannot be selected
+        # on at all. With it, the deep is a place that costs something specific to occupy.
+        local_pressure = (
+            self.planet.pressure
+            + self.planet.pressure_per_km_depth * environment.depth_km
+        )
         pressure = saturating_hazard(
             config.h_pressure_max,
             config.pressure_mismatch_scale
-            * abs(self.planet.pressure - 1.0)
+            * np.abs(local_pressure - 1.0)
             / (1.0 + phenotype.trait("pressure_tolerance").astype(np.float64)),
         )
 

@@ -67,6 +67,12 @@
   .detail.hidden { display: none; }
   .lineage { color: var(--dim); word-break: break-all; margin-bottom: 8px; }
   .lineage b { color: var(--text); font-weight: 500; }
+  .creature { margin-bottom: 10px; }
+  .creature.hidden { display: none; }
+  #creature { display: block; width: 100%; height: 200px; border-radius: 6px;
+              background: linear-gradient(#11161d, #0b0e13); cursor: grab; }
+  #creature:active { cursor: grabbing; }
+  .creature .caption { color: var(--dim); margin-top: 4px; text-align: center; }
   .drift { margin-top: 10px; }
   .drift .head { color: var(--dim); margin-bottom: 4px; }
   .drift .bar { position: relative; height: 3px; background: var(--line); border-radius: 2px; margin: 1px 0 4px; }
@@ -136,6 +142,10 @@
         <div class="row"><span>ever</span><b id="s-species-ever">—</b></div>
         <ul class="species-list" id="species-list"></ul>
         <div class="detail hidden" id="species-detail">
+          <div class="creature hidden" id="creature-box">
+            <canvas id="creature"></canvas>
+            <div class="caption"><span id="d-body">—</span></div>
+          </div>
           <div class="lineage" id="d-lineage">—</div>
           <div class="row"><span>population</span><b id="d-pop">—</b></div>
           <div class="row"><span>peak</span><b id="d-peak">—</b></div>
@@ -340,6 +350,519 @@ function drawChart(canvas, history) {
 }
 
 // --- species --------------------------------------------------------------------------
+/* ---- the creature viewer ------------------------------------------------------------
+   Ported from spikes/morphology/index.html, which existed to answer whether an evolvable
+   body plan was worth building before the genome committed to one. Three changes were made
+   on the way in:
+
+   1. The spike's `arch`, `limb_thickness`, `limb_droop`, `limb_segments`, `eye_size` and
+      `hue` genes are gone -- the spike found the first four invisible or decorative -- so
+      they appear below as named constants instead of genome entries.
+   2. `radius_ratio`, `limb_ratio` and `tail_ratio` arrive as fractions of body_length and are
+      expanded to absolute lengths at the top of buildCreature. The mesh code below is
+      otherwise the spike's.
+   3. Colour comes from the species' diet rather than a `hue` gene, so what an animal looks
+      like tells you how it makes a living, and it costs the genome nothing.
+
+   The radius profile is the one in phenotype.py, reading the same constants from /api/meta.
+   That is deliberate and load-bearing: the animal drawn here is the animal whose volume and
+   surface area the energy model charges for. */
+
+const V = {
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
+  cross: (a, b) => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ],
+  norm(a) {
+    const l = Math.hypot(a[0], a[1], a[2]);
+    return l > 1e-9 ? [a[0] / l, a[1] / l, a[2] / l] : [0, 0, 1];
+  },
+};
+
+function mat4Perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1,
+          0, 0, 2 * far * near * nf, 0];
+}
+function mat4LookAt(eye, center, up) {
+  const z = V.norm(V.sub(eye, center));
+  const x = V.norm(V.cross(up, z));
+  const y = V.cross(z, x);
+  return [
+    x[0], y[0], z[0], 0,
+    x[1], y[1], z[1], 0,
+    x[2], y[2], z[2], 0,
+    -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]),
+    -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]),
+    -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]), 1,
+  ];
+}
+function mat4Mul(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] +
+                     a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    }
+  }
+  return o;
+}
+
+/* Body colour from diet, not from a gene. Green fixes its own energy, brown lives off what
+   falls, red eats other animals; an omnivore lands between them. */
+const DIET_COLORS = {
+  autotroph: [0.36, 0.62, 0.33],
+  detritus:  [0.55, 0.44, 0.29],
+  herbivore: [0.72, 0.62, 0.26],
+  carnivore: [0.72, 0.31, 0.28],
+};
+
+function dietColor(diet) {
+  const out = [0, 0, 0];
+  let total = 0;
+  for (const [name, rgb] of Object.entries(DIET_COLORS)) {
+    const w = diet && diet[name] ? diet[name] : 0;
+    total += w;
+    for (let k = 0; k < 3; k++) out[k] += rgb[k] * w;
+  }
+  if (total <= 0) return [0.45, 0.55, 0.45];
+  return out.map((c) => c / total);
+}
+
+const shade = (c, f) => c.map((v) => Math.max(0, Math.min(1, v * f)));
+
+class MeshBuilder {
+  constructor() { this.v = []; this.i = []; this.n = 0; }
+
+  push(p, nrm, col) {
+    this.v.push(p[0], p[1], p[2], nrm[0], nrm[1], nrm[2], col[0], col[1], col[2]);
+    return this.n++;
+  }
+  tri(a, b, c) { this.i.push(a, b, c); }
+
+  /* A swept tube: the workhorse for bodies, limbs and tails. `spine` is a polyline and
+     `radii` gives the radius at each point. Frames are built from the local tangent, which
+     is adequate because none of our spines twist. */
+  tube(spine, radii, seg, col, capStart, capEnd) {
+    const rings = [];
+    for (let i = 0; i < spine.length; i++) {
+      const prev = spine[Math.max(0, i - 1)], next = spine[Math.min(spine.length - 1, i + 1)];
+      const t = V.norm(V.sub(next, prev));
+      const ref = Math.abs(t[1]) > 0.9 ? [0, 0, 1] : [0, 1, 0];
+      const n1 = V.norm(V.cross(t, ref));
+      const n2 = V.norm(V.cross(t, n1));
+      const ring = [];
+      for (let s = 0; s < seg; s++) {
+        const a = (s / seg) * Math.PI * 2;
+        const dir = V.add(V.scale(n1, Math.cos(a)), V.scale(n2, Math.sin(a)));
+        ring.push(this.push(V.add(spine[i], V.scale(dir, radii[i])), dir, col));
+      }
+      rings.push({ ring, tangent: t });
+    }
+    for (let i = 0; i < rings.length - 1; i++) {
+      const a = rings[i].ring, b = rings[i + 1].ring;
+      for (let s = 0; s < seg; s++) {
+        const s2 = (s + 1) % seg;
+        this.tri(a[s], b[s], b[s2]);
+        this.tri(a[s], b[s2], a[s2]);
+      }
+    }
+    if (capStart) this.cap(spine[0], rings[0], V.scale(rings[0].tangent, -1), col, true);
+    if (capEnd) {
+      const last = rings[rings.length - 1];
+      this.cap(spine[spine.length - 1], last, last.tangent, col, false);
+    }
+  }
+
+  cap(center, ringInfo, normal, col, flip) {
+    const c = this.push(center, normal, col);
+    const r = ringInfo.ring;
+    for (let s = 0; s < r.length; s++) {
+      const s2 = (s + 1) % r.length;
+      if (flip) this.tri(c, r[s2], r[s]); else this.tri(c, r[s], r[s2]);
+    }
+  }
+
+  sphere(center, radius, seg, col, squashY = 1) {
+    const rows = Math.max(4, Math.round(seg / 2));
+    const grid = [];
+    for (let i = 0; i <= rows; i++) {
+      const phi = (i / rows) * Math.PI, row = [];
+      for (let s = 0; s <= seg; s++) {
+        const th = (s / seg) * Math.PI * 2;
+        const d = [Math.sin(phi) * Math.cos(th), Math.cos(phi), Math.sin(phi) * Math.sin(th)];
+        const p = [center[0] + d[0] * radius,
+                   center[1] + d[1] * radius * squashY,
+                   center[2] + d[2] * radius];
+        row.push(this.push(p, V.norm([d[0], d[1] / squashY, d[2]]), col));
+      }
+      grid.push(row);
+    }
+    for (let i = 0; i < rows; i++) {
+      for (let s = 0; s < seg; s++) {
+        this.tri(grid[i][s], grid[i + 1][s], grid[i + 1][s + 1]);
+        this.tri(grid[i][s], grid[i + 1][s + 1], grid[i][s + 1]);
+      }
+    }
+  }
+
+  /* A flat sheet, used for the dorsal fin. Rendered two-sided by the shader, so it needs
+     no thickness -- which is also why phenotype.py counts it as surface without volume. */
+  sheet(base, tips, col) {
+    const b = base.map((p) => this.push(p, [0, 0, 1], col));
+    const t = tips.map((p) => this.push(p, [0, 0, 1], col));
+    for (let i = 0; i < b.length - 1; i++) {
+      this.tri(b[i], t[i], t[i + 1]);
+      this.tri(b[i], t[i + 1], b[i + 1]);
+    }
+  }
+}
+
+/* Genes the spike cut, kept as the constants it used, so the mesh code is unchanged. */
+const LIMB_DROOP = 0.3;
+const LIMB_JOINTS = 2;
+const EYE_SIZE = 0.16;
+
+/* The genotype -> geometry map. Its radius profile is `radius_profile` in phenotype.py; if
+   one changes the other must, or the creature on screen stops being the creature that pays. */
+function buildCreature(genes, diet, shape) {
+  const mb = new MeshBuilder();
+  const bodyCol = dietColor(diet);
+  const limbCol = shade(bodyCol, 0.78);
+  const headCol = shade(bodyCol, 1.18);
+  const finCol = shade(bodyCol, 0.9);
+  const eyeCol = [0.05, 0.05, 0.07];
+
+  const L = genes.body_length;
+  const R = genes.radius_ratio * L;
+  const STEPS = Math.max(24, Math.min(shape.profile_samples - 1, 128));
+  const SEG = 16;
+
+  // Spine runs -L/2 .. +L/2 along x; +x is the head end. The spike's `arch` gene was cut,
+  // so the spine is straight -- which also removed the worst of the joint-constraint problem
+  // the spike ran into, where a strong arch on a thin body read as nothing biological.
+  const spineAt = (t) => [(t - 0.5) * L, 0, 0];
+
+  // phenotype.radius_profile, transcribed.
+  const radiusAt = (t) => {
+    let r = R * Math.pow(Math.max(4 * t * (1 - t), 1e-4), genes.fullness);
+    r *= 1 + genes.taper * (t - 0.5) * shape.taper_gain;
+    const ripple = Math.cos(2 * Math.PI * t * genes.segment_count);
+    r *= 1 - genes.segment_depth * shape.segment_relief * (1 - ripple) / 2;
+    return Math.max(r, shape.min_radius_ratio * R);
+  };
+
+  const spine = [], radii = [];
+  for (let i = 0; i <= STEPS; i++) {
+    const t = i / STEPS;
+    spine.push(spineAt(t));
+    radii.push(radiusAt(t));
+  }
+  mb.tube(spine, radii, SEG, bodyCol, true, true);
+
+  // Tail: continues aft, tapering to a point.
+  const tailLength = genes.tail_ratio * L;
+  if (tailLength > 0.03 * L) {
+    const ts = [], tr = [], N = 14;
+    const start = spineAt(0);
+    const base = radiusAt(0.06) * shape.tail_base_gain + shape.tail_base_offset_ratio * R;
+    for (let i = 0; i <= N; i++) {
+      const u = i / N;
+      ts.push([start[0] - u * tailLength, start[1], 0]);
+      tr.push(Math.max(0.002 * R, base * (1 - u)));
+    }
+    mb.tube(ts, tr, Math.max(6, SEG / 2), bodyCol, false, true);
+  }
+
+  // Head and eyes. head_size 0 means no head at all -- the founder has none.
+  const headPos = spineAt(1);
+  const headR = genes.head_size * R * shape.head_radius_gain;
+  if (genes.head_size > 0.04) {
+    mb.sphere([headPos[0] + headR * 0.5, headPos[1], 0], headR, 14, headCol,
+              shape.head_squash);
+    const eyeR = EYE_SIZE * headR;
+    const sym = Math.round(genes.radial_symmetry);
+    const k = sym <= 1 ? 2 : sym;
+    for (let j = 0; j < k; j++) {
+      const a = k === 2 ? (j === 0 ? Math.PI / 2 : -Math.PI / 2) : (j / k) * Math.PI * 2;
+      mb.sphere(
+        [headPos[0] + headR * 0.95, headPos[1] + Math.sin(a) * headR * 0.45,
+         Math.cos(a) * headR * 0.62],
+        eyeR, 8, eyeCol
+      );
+    }
+  }
+
+  // Dorsal fin: a sheet standing off the back.
+  if (genes.dorsal_fin > 0.02) {
+    const base = [], tips = [], N = 18;
+    for (let i = 0; i <= N; i++) {
+      const t = 0.18 + (i / N) * 0.62;
+      const p = spineAt(t), r = radiusAt(t);
+      base.push([p[0], p[1] + r * 0.92, 0]);
+      tips.push([p[0],
+                 p[1] + r * 0.92 + genes.dorsal_fin * R * shape.fin_span *
+                 Math.sin((i / N) * Math.PI), 0]);
+    }
+    mb.sheet(base, tips, finCol);
+  }
+
+  // Limbs. Bilateral (radial_symmetry 1) puts a pair either side; higher symmetry arrays
+  // them around the body axis, which is what turns the animal into something radial.
+  const pairs = Math.round(genes.limb_pairs);
+  const sym = Math.round(genes.radial_symmetry);
+  const limbLength = genes.limb_ratio * L;
+  const limbThickness = shape.limb_thickness_ratio * R;
+  if (pairs > 0 && limbLength > 0.02 * L) {
+    const dirs = [];
+    if (sym <= 1) {
+      const splay = genes.limb_splay * Math.PI * 0.5;
+      dirs.push([0, -Math.sin(splay), Math.cos(splay)], [0, -Math.sin(splay), -Math.cos(splay)]);
+    } else {
+      for (let j = 0; j < sym; j++) {
+        const a = (j / sym) * Math.PI * 2;
+        dirs.push([0, Math.sin(a), Math.cos(a)]);
+      }
+    }
+    for (let p = 0; p < pairs; p++) {
+      const t = pairs === 1 ? 0.5 : 0.26 + (p / (pairs - 1)) * 0.5;
+      const attach = spineAt(t), r = radiusAt(t);
+      for (const d0 of dirs) {
+        const segLen = limbLength / LIMB_JOINTS;
+        let pos = V.add(attach, V.scale(d0, r * 0.75));
+        const ls = [pos], lr = [limbThickness];
+        let dir = d0;
+        for (let j = 1; j <= LIMB_JOINTS; j++) {
+          dir = V.norm(V.add(dir, [0, -LIMB_DROOP * 0.85, 0]));
+          pos = V.add(pos, V.scale(dir, segLen));
+          ls.push(pos);
+          lr.push(limbThickness * (1 - 0.6 * (j / LIMB_JOINTS)));
+        }
+        mb.tube(ls, lr, 8, limbCol, true, true);
+      }
+    }
+  }
+
+  return {
+    vertices: new Float32Array(mb.v),
+    indices: new Uint32Array(mb.i),
+    count: mb.i.length,
+  };
+}
+
+function meshBounds(mesh) {
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  const v = mesh.vertices;
+  for (let i = 0; i < v.length; i += 9) {
+    for (let k = 0; k < 3; k++) {
+      lo[k] = Math.min(lo[k], v[i + k]);
+      hi[k] = Math.max(hi[k], v[i + k]);
+    }
+  }
+  return { lo, hi };
+}
+
+const CREATURE_VERT = `#version 300 es
+in vec3 aPos; in vec3 aNormal; in vec3 aColor;
+uniform mat4 uVP;
+out vec3 vN; out vec3 vColor; out vec3 vPos;
+void main() { vN = aNormal; vColor = aColor; vPos = aPos; gl_Position = uVP * vec4(aPos, 1.0); }`;
+
+const CREATURE_FRAG = `#version 300 es
+precision highp float;
+in vec3 vN; in vec3 vColor; in vec3 vPos;
+uniform vec3 uLight; uniform vec3 uEye;
+out vec4 outColor;
+void main() {
+  // Two-sided lighting, because the fin is a zero-thickness sheet and tube winding is not
+  // guaranteed consistent. Cheaper than getting every winding right in the builder.
+  vec3 N = normalize(vN);
+  if (!gl_FrontFacing) N = -N;
+  vec3 L = normalize(uLight);
+  vec3 E = normalize(uEye - vPos);
+  vec3 H = normalize(L + E);
+  float diff = max(dot(N, L), 0.0);
+  // Brighter than the spike's version, which had a full window to itself. In a 320px panel on
+  // a near-black background the original exposure left the body a silhouette, and a silhouette
+  // cannot show you the diet colour -- which is the one thing the colour is there to say.
+  float amb = 0.34 + 0.20 * max(dot(N, vec3(0.0, 1.0, 0.0)), 0.0);
+  float spec = pow(max(dot(N, H), 0.0), 28.0) * 0.22;
+  float rim = pow(1.0 - max(dot(N, E), 0.0), 3.0) * 0.22;
+  vec3 c = vColor * (amb + diff * 1.05) + vec3(spec) + vec3(0.30, 0.45, 0.65) * rim;
+  outColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}`;
+
+/* The viewer owns its own GL context and does nothing at all if WebGL2 is unavailable --
+   the rest of the UI is a 2D canvas and must keep working on a machine that cannot do this. */
+const creatureView = (() => {
+  const canvas = $("creature");
+  let gl = null;
+  try {
+    gl = canvas.getContext("webgl2", { antialias: true });
+  } catch (error) {
+    gl = null;
+  }
+  if (!gl) return { available: false, show() {}, hide() {} };
+
+  const compile = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      throw new Error("shader compile failed: " + gl.getShaderInfoLog(s));
+    }
+    return s;
+  };
+
+  let program;
+  try {
+    program = gl.createProgram();
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, CREATURE_VERT));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, CREATURE_FRAG));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      throw new Error("program link failed: " + gl.getProgramInfoLog(program));
+    }
+  } catch (error) {
+    console.warn("creature viewer disabled:", error.message);
+    return { available: false, show() {}, hide() {} };
+  }
+  gl.useProgram(program);
+  const uVP = gl.getUniformLocation(program, "uVP");
+  const uLight = gl.getUniformLocation(program, "uLight");
+  const uEye = gl.getUniformLocation(program, "uEye");
+  gl.enable(gl.DEPTH_TEST);
+
+  const vao = gl.createVertexArray();
+  const vbo = gl.createBuffer();
+  const ibo = gl.createBuffer();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  for (const [name, offset] of [["aPos", 0], ["aNormal", 12], ["aColor", 24]]) {
+    const loc = gl.getAttribLocation(program, name);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 9 * 4, offset);
+  }
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+  gl.bindVertexArray(null);
+
+  let indexCount = 0;
+  let centre = [0, 0, 0];
+  let radius = 1;
+  let spin = 1;
+  let rise = 1;
+  let angle = 0.6;
+  let spinning = true;
+  let running = false;
+  let dragging = false;
+  let lastX = 0;
+
+  // Drag to turn the animal; releasing hands it back to the slow auto-rotation, because the
+  // point of the panel is to be glanceable while a run plays.
+  canvas.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    spinning = false;
+    lastX = event.clientX;
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    angle += (event.clientX - lastX) * 0.01;
+    lastX = event.clientX;
+  });
+  const release = () => { dragging = false; spinning = true; };
+  canvas.addEventListener("pointerup", release);
+  canvas.addEventListener("pointercancel", release);
+
+  function upload(mesh) {
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.vertices, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    indexCount = mesh.count;
+
+    const { lo, hi } = meshBounds(mesh);
+    centre = [0, 1, 2].map((k) => (lo[k] + hi[k]) / 2);
+    // Frame whatever we built. body_length spans a factor of 240, so the camera cannot be
+    // fixed: without this a large animal overflows the panel and a small one is a dot.
+    // The radius that matters is the one the animal presents while it turns, which is the
+    // half-diagonal of its footprint in the ground plane, not of the whole box.
+    // Two radii, because the panel is much wider than it is tall. `spin` is the footprint the
+    // animal sweeps as it turns and has to fit across; `rise` is its height and has to fit
+    // down. Fitting the long axis into the short axis of the panel, as a single bounding
+    // sphere would, leaves a worm as a thread in the middle of a lot of empty space.
+    spin = Math.max(1e-3, Math.hypot(hi[0] - lo[0], hi[2] - lo[2]) / 2);
+    rise = Math.max(1e-3, (hi[1] - lo[1]) / 2);
+    radius = Math.max(spin, rise);
+  }
+
+  function frame() {
+    if (!running) return;
+    const width = canvas.clientWidth || 1;
+    const height = canvas.clientHeight || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+    }
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0.043, 0.055, 0.075, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    if (indexCount > 0) {
+      if (spinning) angle += 0.006;
+      const fovy = 0.9;
+      const aspect = width / height;
+      const half = Math.tan(fovy / 2);
+      // Back off far enough to satisfy whichever axis is tighter, plus a margin so a limb at
+      // full extension never clips the edge.
+      const distance = Math.max(spin / (half * aspect), rise / half) * 1.18;
+      const eye = [
+        centre[0] + Math.sin(angle) * distance,
+        centre[1] + radius * 0.55,
+        centre[2] + Math.cos(angle) * distance,
+      ];
+      const vp = mat4Mul(
+        mat4Perspective(fovy, aspect, Math.max(1e-4, radius * 0.05), distance * 4),
+        mat4LookAt(eye, centre, [0, 1, 0])
+      );
+      gl.useProgram(program);
+      gl.uniformMatrix4fv(uVP, false, vp);
+      // The key light rides with the camera, raised about 25 degrees. A fixed light leaves the
+      // animal silhouetted for half of every rotation, which is no use for looking at it.
+      gl.uniform3f(
+        uLight,
+        eye[0] - centre[0],
+        distance * 0.45,
+        eye[2] - centre[2]
+      );
+      gl.uniform3fv(uEye, eye);
+      gl.bindVertexArray(vao);
+      gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_INT, 0);
+      gl.bindVertexArray(null);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  return {
+    available: true,
+    show(genes, diet, shape) {
+      upload(buildCreature(genes, diet, shape));
+      if (!running) {
+        running = true;
+        requestAnimationFrame(frame);
+      }
+    },
+    hide() { running = false; },
+  };
+})();
+
 let selected = null;      // species id whose detail is open, or null for the whole biosphere
 let speciesEver = 0;
 let detailPending = false;
@@ -374,6 +897,7 @@ async function refreshDetail() {
     $("d-end").textContent = report.extinct_day === null
       ? "—" : `day ${fmt(report.extinct_day)} (confirmed ${fmt(report.confirmed_day)})`;
     drawChart($("species-chart"), report.series);
+    showCreature(report.morphology);
 
     // The drift table is the answer to "why did it become this": the traits that moved
     // furthest, relative to what each locus can do, since the species appeared.
@@ -393,9 +917,32 @@ async function refreshDetail() {
   }
 }
 
+/* The average body of the selected species, drawn beside the numbers describing it. An
+   extinct species has no living members to average, so `morphology` is null and the panel
+   collapses rather than showing a stale animal from whoever was selected before. */
+function showCreature(morphology) {
+  const box = $("creature-box");
+  if (!creatureView.available || !morphology || !meta || !meta.morphology) {
+    box.classList.add("hidden");
+    creatureView.hide();
+    return;
+  }
+  box.classList.remove("hidden");
+  creatureView.show(morphology.genes, morphology.diet, meta.morphology);
+  const dominant = Object.entries(morphology.diet)
+    .reduce((best, entry) => (entry[1] > best[1] ? entry : best), ["", -1])[0];
+  const limbs = Math.round(morphology.genes.limb_pairs) *
+    (Math.round(morphology.genes.radial_symmetry) <= 1
+      ? 2 : Math.round(morphology.genes.radial_symmetry));
+  $("d-body").textContent =
+    `${dominant} · mass ${sci(morphology.mass)} · ${limbs} limb${limbs === 1 ? "" : "s"}` +
+    ` · ${sci(morphology.genes.body_length)} long`;
+}
+
 async function select(id) {
   selected = id;
   $("species-detail").classList.toggle("hidden", id === null);
+  if (id === null) showCreature(null);
   document.querySelectorAll("#species-list li").forEach((row) => {
     row.classList.toggle("on", Number(row.dataset.id) === id);
   });

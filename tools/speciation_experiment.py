@@ -103,7 +103,7 @@ VARIANTS: tuple[Variant, ...] = (
         "thermal species concept",
         [],
         "does measuring distance over the loci selection acts on undo the 28-locus dilution?",
-        weights={"temp_optimum": 1.0, "body_size": 1.0, "metabolic_rate": 1.0},
+        weights={"temp_optimum": 1.0, "body_length": 1.0, "metabolic_rate": 1.0},
     ),
 )
 

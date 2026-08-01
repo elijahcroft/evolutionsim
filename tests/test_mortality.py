@@ -155,6 +155,32 @@ def test_pressure_hazard_measures_mismatch_from_one_atmosphere(config: Config):
     assert exposed.pressure > adapted.pressure > 0.0
 
 
+def test_depth_is_what_makes_pressure_tolerance_a_live_locus(config: Config):
+    """Before M7 this locus could not be selected on at all.
+
+    Pressure was a planetary constant, and on a 1 atm planet the mismatch term was identically
+    zero for every organism everywhere -- so `pressure_tolerance` drifted and nothing else.
+    With the water column counted, the deep costs something specific to occupy and paying for
+    tolerance buys something specific back.
+    """
+
+    model = MortalityModel.from_config(config)
+    assert config.planet.pressure == pytest.approx(1.0)
+
+    surface = uniform_environment(1, depth_km=0.0)
+    abyss = uniform_environment(1, depth_km=5.0)
+    organism = phenotypes(config, pressure_tolerance=0.0)
+
+    assert model.hazards(organism, surface, ages(1)).pressure == pytest.approx(0.0)
+    assert model.hazards(organism, abyss, ages(1)).pressure > 0.0
+
+    tolerant = phenotypes(config, pressure_tolerance=5.0)
+    assert (
+        model.hazards(tolerant, abyss, ages(1)).pressure
+        < model.hazards(organism, abyss, ages(1)).pressure
+    )
+
+
 def test_senescence_rises_with_age_and_saturates_at_certainty(config, model):
     organism = phenotypes(config, maturity_age=20.0, senescence_rate=0.05)
     environment = uniform_environment(1)

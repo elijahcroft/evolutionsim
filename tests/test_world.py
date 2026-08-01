@@ -143,6 +143,118 @@ def test_resources_never_go_negative(config: Config):
     assert np.all(world.resources.detritus >= 0.0)
 
 
+# -- depth and light (milestone 7) --------------------------------------------------------
+
+
+def test_depth_is_the_water_column_and_land_has_none(config: Config):
+    world = World.create(config.planet, RngBundle(config.sim.seed))
+    land = world.terrain.land
+    assert np.all(world.depth_km[land] == 0.0)
+    # The shallowest water cell sits exactly at sea level, so zero is a legitimate depth.
+    assert np.all(world.depth_km[~land] >= 0.0)
+    assert world.depth_km[~land].max() > 1.0
+    expected = config.planet.terrain.sea_level - world.terrain.elevation_km[~land]
+    assert world.depth_km[~land] == pytest.approx(expected)
+
+
+def test_light_equals_insolation_on_land_and_decays_with_depth(config: Config):
+    world = World.create(config.planet, RngBundle(config.sim.seed))
+    world.step(30)
+    land = world.terrain.land
+    assert world.light[land] == pytest.approx(world.climate.insolation[land])
+    # Attenuation only removes light; it can never add any.
+    assert np.all(world.light <= world.climate.insolation + 1e-12)
+
+    water = ~land
+    order = np.argsort(world.depth_km[water])
+    transmittance = world.transmittance[water][order]
+    assert np.all(np.diff(transmittance) <= 1e-12), "deeper water must not be brighter"
+
+
+def test_a_planet_in_clear_water_is_lit_all_the_way_down():
+    """Attenuation is a property of the planet, not a hardcoded fact about oceans."""
+    config = Config.load(overrides=["planet.climate.light_attenuation_per_km=0.0"])
+    world = World.create(config.planet, RngBundle(config.sim.seed))
+    assert world.light == pytest.approx(world.climate.insolation)
+    assert np.all(world.transmittance == 1.0)
+
+
+def test_deep_water_is_cold_regardless_of_the_sun_above_it(config: Config):
+    """The thermocline: depth cools asymptotically, the way elevation cools linearly."""
+    world = World.create(config.planet, RngBundle(config.sim.seed))
+    world.step(200)
+    water = world.terrain.water
+    shallow = water & (world.depth_km < 0.25)
+    deep = water & (world.depth_km > 3.0)
+
+    assert world.climate.temperature_c[deep].mean() < (
+        world.climate.temperature_c[shallow].mean() - 5.0
+    )
+    # Asymptotic, not runaway: nothing falls below the floor the planet declares.
+    floor = config.planet.climate.deep_temperature_c
+    assert world.climate.temperature_c[deep].min() > floor - 5.0
+
+    # Equatorial and polar abyss converge on the same temperature; the sun above stops
+    # mattering once the water column is deep enough.
+    very_deep = world.depth_km > 4.0
+    if very_deep.sum() > 20:
+        assert world.climate.temperature_c[very_deep].std() < 3.0
+
+
+def test_a_planet_without_a_thermocline_leaves_its_deep_water_alone():
+    """Same seed, same terrain, same cells -- only the thermocline differs.
+
+    Comparing deep cells against shallow ones inside a single world would not show this:
+    basins and shelves sit at different latitudes, so they differ in temperature for reasons
+    that have nothing to do with depth.
+    """
+
+    def deep(*overrides: str) -> tuple[float, float]:
+        config = Config.load(overrides=list(overrides))
+        world = World.create(config.planet, RngBundle(config.sim.seed))
+        cells = world.terrain.water & (world.depth_km > 3.0)
+        values = world.climate.temperature_c[cells]
+        return float(values.mean()), float(values.std())
+
+    on_mean, on_spread = deep()
+    # A scale far larger than the deepest ocean makes the correction vanish.
+    off_mean, off_spread = deep("planet.climate.thermocline_scale_km=1000.0")
+
+    # With it, the abyss sits at the floor the planet declares and barely varies. Without it,
+    # deep water is just whatever the sky above happens to be doing -- note the direction is
+    # not "colder": the thermocline *warms* a polar basin toward 4 C as surely as it cools a
+    # tropical one, which is what makes the deep one connected habitat rather than a rim.
+    assert on_mean == pytest.approx(4.0, abs=1.0)
+    assert on_spread < off_spread / 3.0
+
+
+def test_detritus_sinks_downhill_without_creating_or_destroying_any(config: Config):
+    """Marine snow relocates dead biomass; the pool it moves through is closed."""
+    world = World.create(config.planet, RngBundle(config.sim.seed))
+    resources = world.resources
+    assert resources.sinks_anywhere
+
+    rng = np.random.default_rng(0)
+    resources.detritus[:] = rng.random(resources.detritus.shape)
+    deep = world.depth_km > np.percentile(world.depth_km[world.terrain.water], 75)
+    total_before = resources.detritus.sum()
+    deep_before = resources.detritus[deep].sum()
+
+    for _ in range(50):
+        resources._sink(config.planet.resources.detritus_sink_fraction)
+
+    assert resources.detritus.sum() == pytest.approx(total_before, rel=1e-12)
+    assert resources.detritus[deep].sum() > deep_before
+    assert np.all(resources.detritus >= 0.0)
+
+
+def test_nothing_sinks_when_the_planet_says_it_does_not(config: Config):
+    world = World.create(config.planet, RngBundle(config.sim.seed))
+    world.resources.detritus[:] = 1.0
+    world.resources._sink(0.0)
+    assert np.all(world.resources.detritus == 1.0)
+
+
 def test_world_is_reproducible(config: Config):
     first = World.create(config.planet, RngBundle(123))
     second = World.create(config.planet, RngBundle(123))
