@@ -17,12 +17,15 @@ followed exactly:
    the cell where they fell.
 6. **Breed.** Survivors with enough reserve convert it into offspring.
 7. **Regrow.** Climate advances and resource pools recover.
+8. **Record.** Species are counted, extinctions confirmed, and -- on the configured cadences --
+   the taxonomy is revisited and the time series sampled.
 
 Moving before feeding is what makes movement worth its cost: an organism that finds a better
 cell eats there the same day.  Breeding after mortality means the dead do not reproduce and
 newborns are not aged, fed, or killed on the day they are born.  Regrowing last means organisms
 consume the world as they found it that morning, so a cell cannot be harvested and replenished
-within a single tick.
+within a single tick.  Recording happens after everything else and changes nothing: no organism
+behaves differently for having been counted.
 
 Energy is not conserved -- autotrophy creates it from light, which is the point -- but *matter*
 is.  Every unit of nutrient or detritus an organism assimilates is removed from a pool; every
@@ -40,6 +43,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 from evosim.config import Config
+from evosim.evolution.taxonomy import TaxonomyModel
+from evosim.history.records import History
 from evosim.life.census import CellCensus
 from evosim.life.energy import (
     Costs,
@@ -82,6 +87,9 @@ class TickStats:
     sexual_births: int
     breeding_parents: int
     capacity_throttle: int
+    species: int
+    species_born: int
+    species_extinct: int
     energy_to_offspring: float
     energy_reproduction_overhead: float
     energy_intake: float
@@ -127,6 +135,8 @@ class Simulation:
     movement: MovementModel
     predation: PredationModel
     reproduction: ReproductionModel
+    taxonomy: TaxonomyModel
+    history: History
     last_stats: TickStats | None = field(default=None)
 
     @classmethod
@@ -136,6 +146,8 @@ class Simulation:
         rng = RngBundle(config.sim.seed)
         world = World.create(config.planet, rng)
         population = Population.seed_founders(config, world, rng)
+        history = History.from_config(config, population.phenotypes.trait_names)
+        history.found(world.day, population)
         return cls(
             config=config,
             rng=rng,
@@ -146,6 +158,8 @@ class Simulation:
             movement=MovementModel.for_world(world),
             predation=PredationModel.from_config(config),
             reproduction=ReproductionModel.for_world(config, world, population.schema),
+            taxonomy=TaxonomyModel.from_config(config, population.schema),
+            history=history,
         )
 
     @property
@@ -231,6 +245,7 @@ class Simulation:
         births = self.reproduction.reproduce(population, self.world, self.rng)
 
         self.world.step()
+        born, extinct = self._record()
         stats = self._summarise(
             costs=costs,
             intake=intake,
@@ -241,6 +256,8 @@ class Simulation:
             cells_moved=int(moved.sum()),
             births=births,
             hunt=hunt,
+            species_born=born,
+            species_extinct=extinct,
         )
         self.last_stats = stats
         return stats
@@ -344,6 +361,27 @@ class Simulation:
         population.remove(dead)
         return float(corpse.sum()), starvation_deaths, hazard_deaths, predation_deaths
 
+    def _record(self) -> tuple[int, int]:
+        """Revisit the taxonomy on its cadence, then count and sample on theirs.
+
+        The taxonomy runs first so that a species born today is counted today; ``observe`` runs
+        every tick regardless, because an extinction date read off a 100-day grid would be an
+        extinction date wrong by up to 100 days.
+        """
+
+        day = self.world.day
+        sim = self.config.sim
+        born = 0
+        if day % sim.taxonomy_interval == 0:
+            splits = self.taxonomy.split(
+                self.population, self.rng.speciation, self.history.next_species
+            )
+            born = len(self.history.apply(day, self.population, splits))
+        extinct = self.history.observe(day, self.population)
+        if day % sim.sample_interval == 0:
+            self.history.sample(day, self.population)
+        return born, extinct
+
     def _summarise(
         self,
         *,
@@ -356,6 +394,8 @@ class Simulation:
         cells_moved: int,
         births: BirthStats,
         hunt: HuntStats,
+        species_born: int,
+        species_extinct: int,
     ) -> TickStats:
         """Reduce the tick's arrays to the scalars a run log can carry."""
 
@@ -383,6 +423,9 @@ class Simulation:
             sexual_births=births.sexual_births,
             breeding_parents=births.parents,
             capacity_throttle=births.throttled,
+            species=len(self.history.living()),
+            species_born=species_born,
+            species_extinct=species_extinct,
             energy_to_offspring=births.energy_invested,
             energy_reproduction_overhead=births.energy_overhead,
             energy_intake=float(intake.total.sum()),

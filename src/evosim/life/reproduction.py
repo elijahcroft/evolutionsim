@@ -21,7 +21,12 @@ Four decisions worth stating, because each one could reasonably have gone anothe
 3. **Reproduction happens after mortality**, so the dead do not breed and newborns are not aged,
    fed, or killed on the day they are born.
 
-4. **The overhead is deposited as detritus, not deleted.**  ``reproduction.overhead`` above one
+4. **An offspring inherits the species of the parent that bore it.**  Nothing here decides that
+   a newborn is a new kind of organism, however far a mutation moved it; only the periodic
+   taxonomy in :mod:`evosim.evolution` splits a species, and it does so on the distribution of
+   a whole group rather than on one individual.
+
+5. **The overhead is deposited as detritus, not deleted.**  ``reproduction.overhead`` above one
    models gametes and failed births; that material is real, and destroying it would put a third
    hole in the matter ledger that :mod:`evosim.sim` otherwise keeps closed.
 """
@@ -150,6 +155,7 @@ class ReproductionModel:
             cells,
             energy=endowment.astype(np.float32),
             parent_id=self._parentage(population, parent_of, mates),
+            species_id=population.species_id[parent_of],
             generation=population.generation[parent_of] + 1,
         )
         return BirthStats(

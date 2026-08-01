@@ -14,17 +14,19 @@ history.
 
 ## Status
 
-**Milestone 4 of 8 — reproduction, selection, and the food web.** The loop is closed. Organisms
-age, move, feed, hunt, die, and breed; a founder cohort is now a lineage that outlives it by
-hundreds of generations. Selection is real and measured: seed a lineage two degrees below the
-temperature of the water it lives in and its descendants climb toward it, and the same founder
-on a colder planet ends up colder — with nothing in the code naming a fitness function.
+**Milestone 5 of 8 — species and history.** The simulation now has a memory. Organisms age,
+move, feed, hunt, die, and breed; selection is real and measured; and a run records which
+species existed, which species each one came from, when each went extinct, and how their traits
+moved over time. A species is not a label applied from outside — it is the same genetic-distance
+threshold that already decides whether two organisms can breed, so the taxonomy and assortative
+mating cannot disagree.
 
-Predation and herbivory work, but no predatory lineage arises on the reference planet by itself:
-the traits that make hunting pay only pay once several of them are large at once, so it sits
-across a fitness valley. Species, lineage history, and extinction records are Milestone 5. See
-[DEVLOG.md](DEVLOG.md) for exactly what is and is not implemented, including two calibration
-findings and one bug where the population cap was quietly doing selection of its own.
+Two things do not happen by themselves on the reference planet, both recorded rather than tuned
+away: no predatory lineage arises (hunting only pays once several traits are large at once), and
+**nothing speciates** — fully isolated lineages diverge to 0.03 against a compatibility
+threshold of 0.15, and no threshold value separates real divergence from drift. See
+[DEVLOG.md](DEVLOG.md) for exactly what is and is not implemented, and for the measurements
+behind that claim.
 
 ## Setup
 
@@ -42,10 +44,15 @@ python3 -m venv .venv
 .venv/bin/evosim --set planet.gravity=1.4         # override any config value
 .venv/bin/evosim --set genome.loci.body_size.sigma=0.1
 .venv/bin/evosim --planet heavy.yaml              # an alternative world file
-.venv/bin/evosim --ticks 365 --out runs/year_one  # run the simulation; save world + population
+.venv/bin/evosim --ticks 365 --out runs/year_one  # run; save world, population, and history
 .venv/bin/python tools/render_world.py --day 90 --out world-day-90.png
 .venv/bin/python tools/profile_tick.py             # time the biological tick at 40k organisms
 ```
+
+A run written with `--out` leaves `history.json` beside the world and population dumps: every
+species that existed, the species it split from, its origin and extinction days, and the
+per-species trait time series sampled every `sim.sample_interval` days. It reproduces exactly
+from `(config, seed)`.
 
 ### Watching a run in the browser
 

@@ -5,6 +5,113 @@ and what the next task is.
 
 ---
 
+## Milestone 5 — species and history
+
+**Status: complete.** 378 tests passing.
+
+### Completed
+
+- **`src/evosim/evolution/taxonomy.py` — one metric, two uses.** The split test is 2-means run
+  in exactly the space `GenomeSchema.genetic_distance` measures in: each expressed trait divided
+  by its locus span and scaled by the square root of its distance weight, which makes Euclidean
+  distance between coordinate vectors *equal* genetic distance (a test asserts that to 1e-6). A
+  species splits when the two cluster centres are further apart than
+  `mate_compatibility_distance` — the same number that decides whether two organisms can breed.
+  So assortative mating and the taxonomy cannot disagree, and **no coefficient entered the model
+  that was not already in `energy.yaml`**. Splitting recurses until nothing more splits, because
+  `taxonomy_interval` should set how often taxonomy is revisited, not how much divergence one
+  pass may recognise.
+
+- **The larger half keeps the ancestral identity.** A split is a bifurcation; calling both
+  halves new would discard the continuity the lineage tree exists to record. There is
+  deliberately **no minimum species size**: a lone organism far enough from everything else is
+  reproductively isolated by the same threshold, and inventing a quorum constant would be
+  inventing a number `config/` does not contain.
+
+- **`src/evosim/history/records.py` — the run's memory.** A `SpeciesRecord` per species
+  (parentage, origin day, origin trait means, current and peak population, extinction), the
+  lineage tree they form, and the `sample_interval` time series broken down by species. Nothing
+  in the tick ever reads it — a history that fed back into the model would be a hidden selection
+  pressure of exactly the kind this project forbids — and a test pins that sampling a run
+  changes nothing about it.
+
+- **Extinction is confirmed once, and dated to when it happened.** `extinction_confirm_ticks`
+  guards against calling a transient dip an ending, but the ending itself occurred when the last
+  member died, so both days are recorded. A species identity is never reused, so a resurrected
+  id could only ever be a bug. Counting runs every tick rather than on the taxonomy cadence:
+  an extinction date read off a 100-day grid would be wrong by up to 100 days.
+
+- **`sim.py` — an eighth stage.** The tick is now age → move → pay → eat → hunt → die → breed →
+  regrow → **record**. Offspring inherit the species of the parent that bore them; only the
+  periodic taxonomy reassigns anyone, and it does so on the distribution of a whole group rather
+  than on one individual. `TickStats` gained `species`, `species_born`, `species_extinct`; the
+  CLI reports living species and writes `history.json` beside the existing run dumps.
+
+- **One calibration finding, deliberately not tuned away: nothing speciates on the reference
+  planet, and no threshold value would fix that.** M5 is the first milestone able to measure
+  genetic spread, and the measurements are unambiguous:
+  - A 2,000-day run holds a maximum pairwise distance of **0.07** against a compatibility
+    threshold of **0.15**, with a mean of 0.023. Mate compatibility therefore never bites.
+  - Two *completely isolated* lineages (independent runs from the same founder, one on a colder
+    planet) diverge to only **0.030** after 3,000 days — no further apart than the spread inside
+    a single panmictic population. So there is no gap between "drift" and "divergence" to put a
+    threshold in: any value low enough to split isolated lineages would also shatter one
+    undivided population into noise.
+  - A 10× mutation rate reaches **0.06**, still not the threshold. Mutation-selection balance
+    bounds the spread; raising mutation does not raise it much.
+  - The root cause is dilution: genetic distance is an RMS over 28 loci, so adaptation on a few
+    loci barely moves it. A *full-range* shift of `temp_optimum` alone would be 0.19, but the
+    ~50 °C shift a real planet can select is only 0.085. This is the same shape of result as
+    M4's predation valley: the mechanism works, the reference planet does not reach it, and
+    which of the three available fixes is right (larger sigmas, a distance metric weighted
+    toward the loci that actually vary, or stronger geographic isolation) is a question to
+    settle with an experiment rather than a guess.
+
+- **Performance.** Recording costs **0.2 ms of a 21.1 ms tick** (~1%) at 40,000 organisms. The
+  periodic work is 29.6 ms for a taxonomy pass and 7.9 ms for a sample — about 0.4 ms/tick
+  amortised at the default 100-tick cadences.
+
+- **Acceptance coverage.** 37 new tests. The milestone's three criteria are pinned: a lineage
+  divided between two habitats is recorded as two species with the right parentage; a species
+  that reaches zero is declared extinct exactly once, on the confirmation day, and is never
+  revived; and two runs of the same `(config, seed)` produce byte-identical history documents.
+
+### Consequences and known limitations
+
+- **Every split in the test suite is imposed, not evolved**, for the reason measured above. The
+  machinery is verified end to end through the ordinary tick, but "two species arose" has not
+  been observed happening by itself on any planet tried.
+- **The split test compares centroids, not distributions.** Two clusters whose centres are 0.16
+  apart are declared separate species even if their tails overlap, and the fraction of pairs
+  that could actually still interbreed is not measured. A distributional test would be more
+  honest and much more expensive.
+- **2-means assumes two.** A species that has genuinely trifurcated is found as three only
+  because splitting recurses; a pass sees at most a bisection.
+- **History is not yet a resumable snapshot.** `history.json` is a diagnostic dump like
+  `world.npz`: it records what happened, not enough to restart from it.
+- **The species panel does not exist.** The browser UI reports population and the tick ledger;
+  nothing there yet lets you open a species and read its lineage, which is what the recorded
+  data is for.
+- Every M1–M4 limitation still stands, including the population cap dominating a default run
+  and predation sitting across a fitness valley.
+
+### Next task — Milestone 6: the run you can read
+
+The server and browser UI arrived early (they were planned for this milestone and are already
+driving the sim). What is missing is that none of what M5 records is visible: surface the
+species list, the lineage tree, and the sampled trait time series through the API and the UI, so
+that "open a species and read why it became what it is" is something a person can do rather than
+something a JSON file permits.
+
+Alongside it, settle the speciation-scale question with an experiment rather than a tuning pass:
+run isolated demes under strong divergent selection with varied `sigma` and distance weights, and
+record which of them — if any — produces a split that is divergence rather than drift.
+
+Verified by: a species can be opened in the UI and its ancestry and trait history read; and the
+speciation experiment produces a written finding, whether or not it produces a species.
+
+---
+
 ## Milestone 4 — reproduction, selection, and the food web
 
 **Status: complete.** 325 tests passing.

@@ -11,6 +11,7 @@ import numpy as np
 
 from evosim import __version__
 from evosim.config import DEFAULT_CONFIG_DIR, Config, ConfigError
+from evosim.history import History
 from evosim.life import DIET_NAMES, HabitatError, Population
 from evosim.rng import STREAM_NAMES
 from evosim.sim import Simulation, TickStats
@@ -118,6 +119,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  founders           : {config.sim.initial_population} in "
           f"{config.sim.initial_habitat}")
     print(f"  living organisms   : {population.size} / {population.capacity}")
+    history = simulation.history
+    print(f"  living species     : {len(history.living())} of {history.species_count} ever "
+          f"({len(history.extinct())} extinct)")
     print(f"  population storage : {population.memory_bytes / (1024 ** 2):.1f} MiB")
     print(f"  simulated day      : {world.day}")
     print(f"  actual land        : {world.terrain.land.mean():.1%}")
@@ -130,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         _print_tick_stats(stats)
 
     if args.out:
-        _write_run(args.out, config, world, population)
+        _write_run(args.out, config, world, population, simulation.history)
         print(f"  output             : {args.out.resolve()}")
     return 0
 
@@ -161,6 +165,9 @@ def _print_tick_stats(stats: TickStats) -> None:
         print(f"  last tick hunting  : {stats.kills} kills from {stats.attacks} attacks by "
               f"{stats.hunters} hunters ({stats.intake_predation:.4g} eaten, "
               f"{stats.carrion_returned:.4g} left as carrion)")
+    if stats.species_born or stats.species_extinct:
+        print(f"  last tick taxonomy : {stats.species_born} species split off, "
+              f"{stats.species_extinct} declared extinct")
     print(f"  cells moved        : {stats.cells_moved}")
     print(f"  mean energy        : {stats.mean_energy:.4g} "
           f"({stats.mean_energy_fullness:.1%} of storage)")
@@ -171,6 +178,7 @@ def _write_run(
     config: Config,
     world: World,
     population: Population,
+    history: History,
 ) -> None:
     """Write diagnostic world and population arrays.
 
@@ -211,6 +219,16 @@ def _write_run(
     }
     with (output_dir / "population.json").open("w", encoding="utf-8") as handle:
         json.dump(population_metadata, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+    # The lineage tree and the sampled time series are what make a finished run explainable
+    # rather than merely final, so they are written whether or not any species ever split.
+    record = history.to_dict()
+    record["config_fingerprint"] = config.fingerprint()
+    record["seed"] = config.sim.seed
+    record["day"] = world.day
+    with (output_dir / "history.json").open("w", encoding="utf-8") as handle:
+        json.dump(record, handle, indent=2, sort_keys=True)
         handle.write("\n")
 
 

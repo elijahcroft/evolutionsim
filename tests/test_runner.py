@@ -109,3 +109,19 @@ def test_out_writes_world_state(tmp_path):
         "herbivore",
         "carnivore",
     ]
+
+def test_out_writes_the_recorded_history(tmp_path):
+    """A finished run must be readable afterwards, which is what milestone 5 is for."""
+    assert main(["--ticks", "3", "--out", str(tmp_path), "--set", "sim.sample_interval=2"]) == 0
+    record = json.loads((tmp_path / "history.json").read_text(encoding="utf-8"))
+    assert record["day"] == 3
+    assert record["seed"] == 42
+    assert len(record["trait_names"]) == 28
+    assert [species["species_id"] for species in record["species"]] == [0]
+    assert record["species"][0]["parent"] is None
+    assert [sample["day"] for sample in record["samples"]] == [2]
+
+
+def test_the_report_names_the_living_species(capsys):
+    assert main(["--ticks", "2"]) == 0
+    assert "living species     : 1 of 1 ever (0 extinct)" in capsys.readouterr().out

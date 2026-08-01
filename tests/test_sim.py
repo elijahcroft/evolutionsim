@@ -248,6 +248,104 @@ def test_a_founder_lineage_persists_beyond_its_first_generation():
     assert np.all(population.generation[population.active] > 0)
 
 
+# -- species and history ----------------------------------------------------------------------------
+
+
+# A life-history strategy at the opposite end of every locus that defines one: late-maturing,
+# hoarding, and highly fecund.  These loci are used because they are survivable -- a body plan
+# pushed this far starves within a tick, which would remove the very divergence under test --
+# and because together they are 0.42 in mate-compatibility units, well past the threshold.
+OPPOSITE_LIFE_HISTORY = (
+    "maturity_age",
+    "senescence_rate",
+    "repro_threshold",
+    "offspring_count",
+    "parental_investment",
+    "sex_bias",
+    "move_persistence",
+)
+
+
+def diverge(simulation: Simulation, rows: np.ndarray) -> None:
+    """Move a block of organisms to the far end of every life-history locus."""
+    population = simulation.population
+    schema = population.schema
+    for name in OPPOSITE_LIFE_HISTORY:
+        index = schema.index_of(name)
+        population.genomes[rows, index, :] = schema.high[index]
+    population.phenotypes.update(0, population.genomes[: population.size], schema)
+
+
+def test_a_run_starts_as_one_species_and_stays_one_while_it_stays_one_kind():
+    simulation = Simulation.create(small(["sim.taxonomy_interval=10"]))
+    stats = simulation.run(40)
+    assert stats.species == 1
+    assert stats.species_born == 0
+    assert stats.species_extinct == 0
+    assert simulation.history.species_count == 1
+
+
+def test_a_lineage_divided_between_two_habitats_becomes_two_species():
+    """The milestone 5 criterion, with the divergence imposed rather than evolved.
+
+    Nothing on the reference planet diverges this far on its own -- see DEVLOG -- so the two
+    halves are seeded already divergent and put in separate habitats.  What is being tested is
+    the whole path: that the ordinary tick notices, records two species with the right
+    parentage, and leaves every organism with the group it belongs to.
+    """
+    simulation = Simulation.create(small(["sim.taxonomy_interval=3"]))
+    population = simulation.population
+    half = population.size // 2
+    rows = np.arange(population.size)
+    diverge(simulation, rows[:half])
+    # Two habitats, one per hemisphere.  Both are the most livable water cell their hemisphere
+    # has, because a habitat that kills its occupants would remove the divergence under test
+    # rather than isolate it.
+    world = simulation.world
+    optimum = float(population.schema.init[population.schema.index_of("temp_optimum")])
+    mismatch = np.where(
+        world.terrain.water, np.abs(world.climate.temperature_c - optimum), np.inf
+    )
+    equator = world.grid.shape[0] // 2
+    north = int(np.argmin(mismatch[:equator]))
+    south = int(np.argmin(mismatch[equator:])) + equator * world.grid.shape[1]
+    population.cell[rows[:half]] = north
+    population.cell[rows[half:]] = south
+
+    stats = simulation.run(3)
+    assert stats.species == 2
+    assert stats.species_born == 1
+    assert simulation.history.lineage(1) == (0, 1)
+    species = population.species_id[population.active]
+    assert set(np.unique(species).tolist()) == {0, 1}
+    # Each species is one coherent kind of organism, not a mixture of both.
+    fecundity = population.phenotypes.trait("offspring_count")
+    assert fecundity[species == 0].std() < 0.1
+    assert fecundity[species == 1].std() < 0.1
+    assert abs(fecundity[species == 0].mean() - fecundity[species == 1].mean()) > 1.0
+
+
+def test_the_taxonomy_is_revisited_only_on_its_interval():
+    simulation = Simulation.create(small(["sim.taxonomy_interval=3"]))
+    population = simulation.population
+    diverge(simulation, np.arange(60))
+
+    born = [simulation.step().species_born for _ in range(6)]
+    assert born[2] == 1  # day 3, and not before it
+    assert sum(born) == 1
+
+
+def test_an_extinct_biosphere_is_recorded_as_an_extinct_species():
+    simulation = Simulation.create(
+        small(["energy.mortality.background=1.0", "sim.extinction_confirm_ticks=3"])
+    )
+    stats = simulation.run(5)
+    assert simulation.population.size == 0
+    assert stats.species == 0
+    assert simulation.history.extinct() == (0,)
+    assert simulation.history.records[0].extinct_day == 0
+
+
 # -- determinism ------------------------------------------------------------------------------------
 
 
@@ -313,6 +411,7 @@ def test_the_tick_has_no_per_organism_python_iteration():
         Simulation.step,
         Simulation._feed,
         Simulation._reap,
+        Simulation._record,
         Simulation._summarise,
         EnergyModel.costs_for,
         EnergyModel.intake_for,
