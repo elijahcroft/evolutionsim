@@ -13,15 +13,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "httpx>=0.27"]   # httpx backs fastapi's TestClient
 viz = ["matplotlib>=3.8"]        # tools/render_world.py, milestone 1
 server = ["fastapi>=0.110", "uvicorn>=0.29"]   # milestone 6
 
 [project.scripts]
 evosim = "evosim.runner:main"
+evosim-ui = "evosim.server.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"evosim.ui" = ["*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

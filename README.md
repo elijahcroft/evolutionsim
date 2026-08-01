@@ -47,6 +47,22 @@ python3 -m venv .venv
 .venv/bin/python tools/profile_tick.py             # time the biological tick at 40k organisms
 ```
 
+### Watching a run in the browser
+
+```sh
+.venv/bin/python -m pip install -e '.[server]'
+.venv/bin/evosim-ui                                # http://127.0.0.1:8000
+.venv/bin/evosim-ui --seed 7 --set planet.gravity=1.4   # same flags as the CLI
+```
+
+Play, pause, or single-step the world; switch the map between population density, temperature,
+elevation, nutrients, detritus, moisture, insolation, and toxicity; read the tick's energy
+ledger and cause-of-death breakdown beside it. Space toggles play, `s` steps.
+
+Time only advances when the browser asks for it — there is no background thread — so a session
+driven from the UI produces exactly the run `evosim --ticks N` produces from the same
+`(config, seed)`. A test asserts that.
+
 ## How it is organised
 
 ```

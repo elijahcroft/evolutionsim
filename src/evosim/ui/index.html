@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>evosim</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14181d;
+    --line: #232a32;
+    --text: #d7dee6;
+    --dim: #7c8896;
+    --accent: #e0a33e;
+    --good: #62b47a;
+    --bad: #c9605f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+    padding: 12px 18px; border-bottom: 1px solid var(--line);
+  }
+  header h1 { margin: 0; font-size: 15px; letter-spacing: .14em; text-transform: uppercase; }
+  header .meta { color: var(--dim); }
+  header .meta b { color: var(--text); font-weight: 500; }
+  main {
+    display: grid; grid-template-columns: minmax(0, 1fr) 320px;
+    align-items: start; gap: 18px; padding: 18px;
+  }
+  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
+  .panel h2 {
+    margin: 0; padding: 9px 12px; font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--line);
+  }
+  #map { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+  .legend {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; border-top: 1px solid var(--line); color: var(--dim);
+  }
+  .legend .ramp { flex: 1; height: 8px; border-radius: 2px; }
+  .side { display: flex; flex-direction: column; gap: 18px; }
+  .rows { padding: 6px 12px 12px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+  .row span { color: var(--dim); }
+  .row.sub span, .row.sub b { color: var(--dim); font-weight: 400; padding-left: 10px; }
+  .row b { font-weight: 500; font-variant-numeric: tabular-nums; }
+  .big { font-size: 26px; font-variant-numeric: tabular-nums; }
+  #chart { display: block; width: 100%; height: 130px; margin-top: 10px; }
+  footer {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 18px; border-top: 1px solid var(--line);
+    position: sticky; bottom: 0; background: var(--bg);
+  }
+  button, select, input {
+    font: inherit; color: var(--text); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 3px; padding: 5px 11px;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  input[type=number] { width: 88px; }
+  .spacer { flex: 1; }
+  .status { color: var(--dim); }
+  .status.err { color: var(--bad); }
+  .status.extinct { color: var(--bad); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>evosim</h1>
+  <div class="meta">planet <b id="m-planet">…</b></div>
+  <div class="meta">seed <b id="m-seed">…</b></div>
+  <div class="meta">day <b id="m-day">0</b> <span id="m-year"></span></div>
+  <div class="meta">config <b id="m-fp">…</b></div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2 id="layer-title">Population density</h2>
+    <canvas id="map"></canvas>
+    <div class="legend">
+      <span id="legend-min">—</span>
+      <div class="ramp" id="legend-ramp"></div>
+      <span id="legend-max">—</span>
+    </div>
+  </section>
+
+  <div class="side">
+    <section class="panel">
+      <h2>Population</h2>
+      <div class="rows">
+        <div class="big" id="s-pop">—</div>
+        <div class="row"><span>of cap</span><b id="s-cap">—</b></div>
+        <div class="row"><span>births</span><b id="s-births">—</b></div>
+        <div class="row"><span>deaths</span><b id="s-deaths">—</b></div>
+        <div class="row sub"><span>starvation</span><b id="s-starve">—</b></div>
+        <div class="row sub"><span>hazard</span><b id="s-hazard">—</b></div>
+        <div class="row sub"><span>predation</span><b id="s-pred">—</b></div>
+        <div class="row"><span>throttled</span><b id="s-throttle">—</b></div>
+        <canvas id="chart"></canvas>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Energy ledger (last tick)</h2>
+      <div class="rows">
+        <div class="row"><span>intake</span><b id="s-intake">—</b></div>
+        <div class="row sub"><span>autotrophy</span><b id="s-auto">—</b></div>
+        <div class="row sub"><span>detritivory</span><b id="s-detr">—</b></div>
+        <div class="row sub"><span>predation</span><b id="s-eaten">—</b></div>
+        <div class="row"><span>cost</span><b id="s-cost">—</b></div>
+        <div class="row sub"><span>basal</span><b id="s-basal">—</b></div>
+        <div class="row sub"><span>support</span><b id="s-support">—</b></div>
+        <div class="row sub"><span>locomotion</span><b id="s-loco">—</b></div>
+        <div class="row sub"><span>thermoregulation</span><b id="s-thermo">—</b></div>
+        <div class="row"><span>net</span><b id="s-net">—</b></div>
+        <div class="row"><span>mean reserve</span><b id="s-reserve">—</b></div>
+        <div class="row"><span>cells moved</span><b id="s-moved">—</b></div>
+        <div class="row"><span>hunting</span><b id="s-hunt">—</b></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <button id="play">▶ play</button>
+  <button id="step">step</button>
+  <span class="meta">speed</span>
+  <button class="speed on" data-ticks="1">×1</button>
+  <button class="speed" data-ticks="10">×10</button>
+  <button class="speed" data-ticks="100">×100</button>
+  <span class="meta">layer</span>
+  <select id="layer"></select>
+  <div class="spacer"></div>
+  <span class="status" id="status"></span>
+  <input type="number" id="seed" placeholder="seed">
+  <button id="reset">reset</button>
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => n === null || n === undefined ? "—" : n.toLocaleString();
+const sci = (n) => {
+  if (n === null || n === undefined) return "—";
+  const a = Math.abs(n);
+  if (a === 0) return "0";
+  if (a >= 1e5 || a < 1e-2) return n.toExponential(2);
+  return n.toFixed(a >= 100 ? 0 : 2);
+};
+
+// --- colour ramps ---------------------------------------------------------------------
+// Each ramp is a list of [stop, r, g, b]; a layer picks one and the legend shows the same.
+const RAMPS = {
+  heat:      [[0, 8, 10, 14], [0.35, 120, 40, 20], [0.7, 224, 163, 62], [1, 255, 244, 214]],
+  diverging: [[0, 60, 96, 180], [0.5, 236, 236, 226], [1, 190, 66, 54]],
+  terrain:   [[0, 12, 32, 70], [0.5, 40, 96, 150], [0.501, 74, 110, 66],
+              [0.8, 140, 128, 84], [1, 236, 236, 236]],
+  green:     [[0, 10, 16, 18], [0.5, 36, 106, 92], [1, 168, 220, 140]],
+  blue:      [[0, 10, 14, 22], [0.5, 40, 88, 140], [1, 168, 214, 236]],
+  violet:    [[0, 12, 10, 20], [0.5, 108, 60, 130], [1, 232, 190, 120]],
+};
+const LAYER_RAMP = {
+  population: "heat", temperature_c: "diverging", elevation_km: "terrain",
+  nutrients: "green", detritus: "violet", moisture: "blue",
+  insolation: "heat", toxicity: "violet",
+};
+
+function rampColor(ramp, t) {
+  t = Math.max(0, Math.min(1, t));
+  for (let i = 1; i < ramp.length; i++) {
+    if (t <= ramp[i][0]) {
+      const [p0, r0, g0, b0] = ramp[i - 1], [p1, r1, g1, b1] = ramp[i];
+      const f = p1 === p0 ? 0 : (t - p0) / (p1 - p0);
+      return [r0 + (r1 - r0) * f, g0 + (g1 - g0) * f, b0 + (b1 - b0) * f];
+    }
+  }
+  const last = ramp[ramp.length - 1];
+  return [last[1], last[2], last[3]];
+}
+
+function rampCss(name) {
+  const ramp = RAMPS[name];
+  const stops = ramp.map(([p, r, g, b]) => `rgb(${r},${g},${b}) ${(p * 100).toFixed(1)}%`);
+  return `linear-gradient(90deg, ${stops.join(",")})`;
+}
+
+// --- state ----------------------------------------------------------------------------
+let meta = null;
+let playing = false;
+let ticksPerCall = 1;
+let latest = null;
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
+const post = (path, body) => api(path, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+// --- rendering ------------------------------------------------------------------------
+const map = $("map");
+const mapCtx = map.getContext("2d");
+const cells = document.createElement("canvas");   // one pixel per grid cell, scaled up on draw
+const cellsCtx = cells.getContext("2d");
+let buffer = null;
+
+function drawMap(layer) {
+  const { width, height } = meta;
+  if (map.width !== width * 6) {
+    map.width = width * 6; map.height = height * 6;
+    cells.width = width; cells.height = height;
+  }
+  if (!buffer) buffer = cellsCtx.createImageData(width, height);
+
+  const ramp = RAMPS[LAYER_RAMP[layer.name] || "heat"];
+  const values = layer.values, land = layer.land;
+  let lo = layer.min, hi = layer.max;
+
+  // Population density is heavily zero-inflated; a linear ramp against the maximum would make
+  // everything but the single densest cell look empty, so it is drawn on a log scale.
+  const log = layer.name === "population";
+  // Diverging layers are anchored at zero so the midpoint colour means something.
+  if (layer.name === "temperature_c" || layer.name === "elevation_km") {
+    const span = Math.max(Math.abs(lo), Math.abs(hi)) || 1;
+    lo = -span; hi = span;
+  }
+  const span = (hi - lo) || 1;
+
+  for (let i = 0; i < values.length; i++) {
+    const value = values[i];
+    let t = log ? Math.log1p(Math.max(value, 0)) / Math.log1p(Math.max(hi, 1))
+                : (value - lo) / span;
+    let [r, g, b] = rampColor(ramp, t);
+    // Every layer keeps the coastline visible: water is tinted, so a bloom can be read against
+    // the geography that produced it rather than floating in the dark.
+    if (layer.name !== "elevation_km" && !land[i]) {
+      r = r * 0.82 + 10; g = g * 0.82 + 18; b = b * 0.82 + 34;
+    }
+    const p = i * 4;
+    buffer.data[p] = r; buffer.data[p + 1] = g; buffer.data[p + 2] = b; buffer.data[p + 3] = 255;
+  }
+
+  cellsCtx.putImageData(buffer, 0, 0);
+  mapCtx.imageSmoothingEnabled = false;
+  mapCtx.drawImage(cells, 0, 0, map.width, map.height);
+
+  $("layer-title").textContent = layer.label;
+  $("legend-ramp").style.background = rampCss(LAYER_RAMP[layer.name] || "heat");
+  $("legend-min").textContent = sci(log ? 0 : lo);
+  $("legend-max").textContent = sci(hi);
+}
+
+const chart = $("chart");
+const chartCtx = chart.getContext("2d");
+
+function drawChart(history) {
+  const width = chart.clientWidth, height = 130;
+  if (chart.width !== width * 2) { chart.width = width * 2; chart.height = height * 2; }
+  chartCtx.setTransform(2, 0, 0, 2, 0, 0);
+  chartCtx.clearRect(0, 0, width, height);
+  if (history.length < 2) return;
+
+  const peak = Math.max(...history.map((h) => h.population), 1);
+  const x = (i) => (i / (history.length - 1)) * width;
+  const y = (v) => height - 4 - (v / peak) * (height - 12);
+
+  chartCtx.beginPath();
+  history.forEach((h, i) => i ? chartCtx.lineTo(x(i), y(h.population))
+                              : chartCtx.moveTo(x(i), y(h.population)));
+  chartCtx.strokeStyle = "#e0a33e";
+  chartCtx.lineWidth = 1.5;
+  chartCtx.stroke();
+  chartCtx.lineTo(width, height); chartCtx.lineTo(0, height); chartCtx.closePath();
+  chartCtx.fillStyle = "rgba(224,163,62,0.10)";
+  chartCtx.fill();
+
+  chartCtx.fillStyle = "#7c8896";
+  chartCtx.font = "10px ui-monospace, monospace";
+  chartCtx.fillText(`peak ${peak.toLocaleString()}`, 4, 12);
+  chartCtx.fillText(`day ${history[0].day}`, 4, height - 2);
+  const lastLabel = `day ${history[history.length - 1].day}`;
+  chartCtx.fillText(lastLabel, width - chartCtx.measureText(lastLabel).width - 2, height - 2);
+}
+
+function render(state) {
+  latest = state;
+  const stats = state.stats;
+  $("m-day").textContent = fmt(state.day);
+  if (meta.year_length_days) {
+    $("m-year").textContent = `(year ${Math.floor(state.day / meta.year_length_days) + 1})`;
+  }
+  $("s-pop").textContent = fmt(state.population);
+  $("s-cap").textContent = `${((state.population / state.capacity) * 100).toFixed(1)}%`;
+
+  const set = (id, value) => { $(id).textContent = value; };
+  if (!stats) {
+    ["s-births","s-deaths","s-starve","s-hazard","s-pred","s-throttle","s-intake","s-auto",
+     "s-detr","s-eaten","s-cost","s-basal","s-support","s-loco","s-thermo","s-net","s-reserve",
+     "s-moved","s-hunt"].forEach((id) => set(id, "—"));
+  } else {
+    set("s-births", fmt(stats.births));
+    set("s-deaths", fmt(stats.deaths));
+    set("s-starve", fmt(stats.deaths_starvation));
+    set("s-hazard", fmt(stats.deaths_hazard));
+    set("s-pred", fmt(stats.deaths_predation));
+    set("s-throttle", fmt(stats.capacity_throttle));
+    $("s-throttle").style.color = stats.capacity_throttle ? "var(--bad)" : "";
+    set("s-intake", sci(stats.energy_intake));
+    set("s-auto", sci(stats.intake_autotrophy));
+    set("s-detr", sci(stats.intake_detritivory));
+    set("s-eaten", sci(stats.intake_predation));
+    set("s-cost", sci(stats.energy_cost));
+    set("s-basal", sci(stats.cost_basal));
+    set("s-support", sci(stats.cost_support));
+    set("s-loco", sci(stats.cost_locomotion));
+    set("s-thermo", sci(stats.cost_thermoregulation));
+    set("s-net", (stats.net_energy >= 0 ? "+" : "") + sci(stats.net_energy));
+    $("s-net").style.color = stats.net_energy >= 0 ? "var(--good)" : "var(--bad)";
+    set("s-reserve", `${(stats.mean_energy_fullness * 100).toFixed(1)}% full`);
+    set("s-moved", fmt(stats.cells_moved));
+    set("s-hunt", stats.attacks
+      ? `${fmt(stats.kills)} kills / ${fmt(stats.attacks)} attacks`
+      : "none");
+  }
+
+  drawMap(state.layer);
+  drawChart(state.history);
+
+  if (state.extinct) {
+    playing = false;
+    $("play").textContent = "▶ play";
+    setStatus("extinct — the lineage is gone", "extinct");
+  }
+}
+
+function setStatus(text, kind) {
+  $("status").textContent = text;
+  $("status").className = "status" + (kind ? ` ${kind}` : "");
+}
+
+// --- control --------------------------------------------------------------------------
+const layerName = () => $("layer").value;
+
+async function stepOnce(ticks) {
+  const state = await post("/api/step", { ticks, layer: layerName() });
+  render(state);
+}
+
+async function loop() {
+  while (playing) {
+    try {
+      await stepOnce(ticksPerCall);
+    } catch (error) {
+      playing = false;
+      $("play").textContent = "▶ play";
+      setStatus(error.message, "err");
+      return;
+    }
+  }
+}
+
+$("play").onclick = () => {
+  if (latest && latest.extinct) return;
+  playing = !playing;
+  $("play").textContent = playing ? "⏸ pause" : "▶ play";
+  $("play").classList.toggle("on", playing);
+  if (playing) { setStatus(""); loop(); }
+};
+
+$("step").onclick = async () => {
+  if (playing) return;
+  try { await stepOnce(ticksPerCall); setStatus(""); }
+  catch (error) { setStatus(error.message, "err"); }
+};
+
+document.querySelectorAll(".speed").forEach((button) => {
+  button.onclick = () => {
+    ticksPerCall = Number(button.dataset.ticks);
+    document.querySelectorAll(".speed").forEach((b) => b.classList.toggle("on", b === button));
+  };
+});
+
+$("layer").onchange = async () => {
+  if (playing) return;  // the next step will pick the new layer up on its own
+  const state = await api(`/api/state?layer=${encodeURIComponent(layerName())}`);
+  render(state);
+};
+
+$("reset").onclick = async () => {
+  playing = false;
+  $("play").textContent = "▶ play";
+  $("play").classList.remove("on");
+  const raw = $("seed").value.trim();
+  try {
+    const state = await post("/api/reset", {
+      seed: raw === "" ? null : Number(raw),
+      layer: layerName(),
+    });
+    meta = await api("/api/meta");
+    applyMeta();
+    setStatus("");
+    render(state);
+  } catch (error) {
+    setStatus(error.message, "err");
+  }
+};
+
+document.addEventListener("keydown", (event) => {
+  if (event.target.tagName === "INPUT" || event.target.tagName === "SELECT") return;
+  if (event.code === "Space") { event.preventDefault(); $("play").click(); }
+  if (event.key === "s") $("step").click();
+});
+
+function applyMeta() {
+  $("m-planet").textContent = meta.planet;
+  $("m-seed").textContent = meta.seed;
+  $("m-fp").textContent = meta.fingerprint.slice(0, 12);
+  $("seed").placeholder = `seed ${meta.seed}`;
+}
+
+async function start() {
+  meta = await api("/api/meta");
+  applyMeta();
+  $("layer").innerHTML = meta.layers
+    .map((l) => `<option value="${l.name}">${l.label}</option>`).join("");
+  render(await api(`/api/state?layer=${layerName()}`));
+}
+
+start().catch((error) => setStatus(error.message, "err"));
+window.addEventListener("resize", () => { if (latest) drawChart(latest.history); });
+</script>
+</body>
+</html>
