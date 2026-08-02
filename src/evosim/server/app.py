@@ -24,12 +24,14 @@ from evosim import __version__
 from evosim.config import DEFAULT_CONFIG_DIR, Config, ConfigError
 from evosim.life import HabitatError
 from evosim.sim import Simulation, TickStats
+from evosim.world.biome import BIOME_NAMES
 
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
 #: Field name in ``World.arrays()`` (or the derived ``population``) → label shown in the UI.
 LAYERS: dict[str, str] = {
     "population": "Population density",
+    "biome": "Biome",
     "elevation_km": "Elevation",
     "depth_km": "Water depth",
     "temperature_c": "Temperature",
@@ -90,7 +92,12 @@ class Session:
             "morphology": asdict(self.config.genome.morphology),
         }
 
-    def state(self, layer: str, species: int | None = None) -> dict[str, Any]:
+    def state(
+        self,
+        layer: str,
+        species: int | None = None,
+        species_b: int | None = None,
+    ) -> dict[str, Any]:
         simulation = self.simulation
         return {
             "day": simulation.world.day,
@@ -100,7 +107,7 @@ class Session:
             "species": len(simulation.history.living()),
             "stats": _stats_payload(simulation.last_stats),
             "history": list(self.history),
-            "layer": self._layer_payload(layer, species),
+            "layer": self._layer_payload(layer, species, species_b),
         }
 
     def species(self) -> dict[str, Any]:
@@ -146,13 +153,31 @@ class Session:
         simulation = self.simulation
         return simulation.history.report(species, simulation.population)
 
-    def _layer_payload(self, layer: str, species: int | None = None) -> dict[str, Any]:
+    def _layer_payload(
+        self,
+        layer: str,
+        species: int | None = None,
+        species_b: int | None = None,
+    ) -> dict[str, Any]:
         if layer not in LAYERS:
             raise KeyError(layer)
-        if layer == "population":
+        # Two layers are classes rather than quantities, and they are the same problem: small
+        # integers that mean a name.  ``classes`` stays absent on every other layer, so nothing
+        # that reads a continuous layer had to learn about this.
+        classes: list[str] | None = None
+        if layer == "population" and species is not None and species_b is not None:
+            # Two range maps drawn at once, which is how you see whether a split was
+            # geographic: the answer is whether "both" appears anywhere.
+            here, there = self._density(species) > 0, self._density(species_b) > 0
+            values = here.astype(np.int64) + 2 * there.astype(np.int64)
+            classes = ["empty", f"species {species}", f"species {species_b}", "both"]
+        elif layer == "population":
             # Restricting density to one species turns the map into a range map, which is how
             # you see that a split is geographic rather than merely numerical.
             values = self._density(species)
+        elif layer == "biome":
+            values = self.simulation.world.biomes()
+            classes = list(BIOME_NAMES)
         elif layer == "elevation_km":
             # Elevation is the one layer drawn relative to sea level, because "is this cell
             # land?" is the question it is actually being read for.
@@ -164,15 +189,21 @@ class Session:
             values = self.simulation.world.arrays()[layer]
         values = np.asarray(values, dtype=np.float64)
         # A filter only means anything on the layer that counts organisms, so it is reported as
-        # unset everywhere else rather than being silently accepted and ignored.
+        # unset everywhere else rather than being silently accepted and ignored.  A comparison
+        # needs both halves, so a lone ``species_b`` is unset for the same reason.
         filtered = species if layer == "population" else None
+        compared = species_b if filtered is not None else None
         label = LAYERS[layer]
-        if filtered is not None:
+        if compared is not None:
+            label = f"{label} — species {filtered} vs {compared}"
+        elif filtered is not None:
             label = f"{label} — species {filtered}"
         return {
             "name": layer,
             "label": label,
             "species": filtered,
+            "species_b": compared,
+            "classes": classes,
             "min": float(values.min()),
             "max": float(values.max()),
             "values": np.round(values, 4).ravel().tolist(),
@@ -240,6 +271,7 @@ class StepRequest(BaseModel):
     ticks: int = Field(default=1, ge=0, le=MAX_TICKS_PER_REQUEST)
     layer: str = "population"
     species: int | None = Field(default=None, ge=0)
+    species_b: int | None = Field(default=None, ge=0)
 
 
 class ResetRequest(BaseModel):
@@ -284,10 +316,15 @@ def create_app(
         if species is not None and species not in session().simulation.history.records:
             raise HTTPException(status_code=404, detail=f"no such species: {species}")
 
-    def state_or_404(layer: str, species: int | None = None) -> dict[str, Any]:
+    def state_or_404(
+        layer: str,
+        species: int | None = None,
+        species_b: int | None = None,
+    ) -> dict[str, Any]:
         require_species(species)
+        require_species(species_b)
         try:
-            return session().state(layer, species)
+            return session().state(layer, species, species_b)
         except KeyError:
             raise HTTPException(status_code=404, detail=f"no such layer: {layer}") from None
 
@@ -300,8 +337,12 @@ def create_app(
         return session().meta()
 
     @app.get("/api/state")
-    def state(layer: str = "population", species: int | None = None) -> dict[str, Any]:
-        return state_or_404(layer, species)
+    def state(
+        layer: str = "population",
+        species: int | None = None,
+        species_b: int | None = None,
+    ) -> dict[str, Any]:
+        return state_or_404(layer, species, species_b)
 
     @app.get("/api/species")
     def species_list() -> dict[str, Any]:
@@ -339,8 +380,9 @@ def create_app(
         current = session()
         with current.lock:
             require_species(request.species)
+            require_species(request.species_b)
             current.step(request.ticks)
-            return state_or_404(request.layer, request.species)
+            return state_or_404(request.layer, request.species, request.species_b)
 
     @app.post("/api/reset")
     def reset(request: ResetRequest) -> dict[str, Any]:

@@ -21,6 +21,10 @@
     --dimmer: #6e7d8e;
     --accent: #e8b256;
     --accent-soft: rgba(232, 178, 86, .13);
+    /* The second selection, for comparing two species. Amber and blue stay apart for every
+       common kind of colour blindness, and "both" is brighter than either. */
+    --accent-b: #7ba0d8;
+    --accent-b-soft: rgba(123, 160, 216, .13);
     --good: #6cc48a;
     --bad: #dc7476;
     --cool: #7ba0d8;
@@ -119,6 +123,17 @@
     flex: 1; height: 8px; border-radius: 4px;
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06);
   }
+  /* A layer of named classes needs a key, not a gradient with two numbers at its ends. The two
+     legends are exclusive: exactly one of them is in the flow at a time. */
+  .legend .classes {
+    flex: 1; display: flex; flex-wrap: wrap; gap: 3px 12px;
+  }
+  .legend .classes span { display: flex; align-items: center; gap: 5px; }
+  .legend .classes i {
+    width: 9px; height: 9px; border-radius: 2px; flex: none;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12);
+  }
+  .legend .hidden { display: none; }
 
   /* -- rows --------------------------------------------------------------------------- */
   .rows { padding: 10px var(--pad) var(--pad); }
@@ -176,10 +191,23 @@
   .species-list li.on {
     border-left-color: var(--accent); background: var(--accent-soft); color: var(--accent);
   }
+  .species-list li.on2 {
+    border-left-color: var(--accent-b); background: var(--accent-b-soft);
+    color: var(--accent-b);
+  }
   .species-list li.gone { color: var(--dimmer); }
   .species-list li b { font-weight: 500; font-variant-numeric: tabular-nums; }
   .species-list .id::before { content: "#"; color: var(--dimmer); }
-  .species-list li.on .id::before { color: inherit; }
+  .species-list li.on .id::before, .species-list li.on2 .id::before { color: inherit; }
+
+  /* The comparison is set with a modifier key, so it also has to be visible and clearable
+     without one -- a state you can enter but not see is a state you get stuck in. */
+  .compare { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; }
+  .compare.hidden { display: none; }
+  .compare b { color: var(--accent-b); font-weight: 500; }
+  .compare button {
+    padding: 1px 7px; line-height: 1.5; font-size: 12px; border-radius: var(--radius-sm);
+  }
 
   /* -- detail blocks ------------------------------------------------------------------ */
   .detail { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
@@ -229,6 +257,15 @@
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     line-height: 1.7; color: var(--text);
   }
+
+  /* Where it lives, in the same prose voice as the organism panel's verdict but quieter: this
+     one is a statement of fact rather than a conclusion drawn from one. */
+  .habitat {
+    margin-top: 12px; padding: 8px 10px; background: var(--raised);
+    border-radius: var(--radius-sm); line-height: 1.6; color: var(--dim);
+  }
+  .habitat.hidden { display: none; }
+  .habitat b { color: var(--text); font-weight: 500; }
 
   .drift { margin-top: 14px; }
   .drift .row { padding-top: 7px; }
@@ -302,6 +339,7 @@
       <span id="legend-min">—</span>
       <div class="ramp" id="legend-ramp"></div>
       <span id="legend-max">—</span>
+      <div class="classes hidden" id="legend-classes"></div>
     </div>
   </section>
 
@@ -323,11 +361,15 @@
     </section>
 
     <section class="panel">
-      <h2>Species</h2>
+      <h2>Species<span class="aside">shift-click a second to compare ranges</span></h2>
       <div class="rows">
         <div class="row"><span>living</span><b id="s-species">—</b></div>
         <div class="row"><span>ever</span><b id="s-species-ever">—</b></div>
         <ul class="species-list" id="species-list"></ul>
+        <div class="compare hidden" id="compare-chip">
+          <span>comparing</span><b id="compare-id">—</b>
+          <button id="compare-clear" title="stop comparing">clear</button>
+        </div>
         <div class="detail hidden" id="species-detail">
           <div class="creature hidden" id="creature-box">
             <canvas id="creature"></canvas>
@@ -338,6 +380,7 @@
           <div class="row"><span>peak</span><b id="d-peak">—</b></div>
           <div class="row"><span>origin</span><b id="d-origin">—</b></div>
           <div class="row"><span>ended</span><b id="d-end">—</b></div>
+          <div class="habitat hidden" id="d-habitat"></div>
           <canvas id="species-chart"></canvas>
           <div class="drift">
             <div class="head">what has changed since it appeared</div>
@@ -461,6 +504,24 @@ const LAYER_RAMP = {
   insolation: "heat", toxicity: "violet",
 };
 
+// Some layers are classes rather than quantities, and a gradient is the wrong instrument for
+// them: the server sends `classes` with the names, and the colour is looked up, not mixed.
+// The biome palette follows the world -- ocean blues, ice whites, then land warming and
+// greening -- so the map reads as a planet before the legend is consulted.
+const PALETTES = {
+  biome: [
+    // Sea ice is kept distinctly bluer than an ice cap, or the polar coastline disappears:
+    // the two are adjacent everywhere they occur and are the only pair that could be confused.
+    [26, 44, 82], [172, 206, 234], [58, 118, 148], [64, 158, 168],
+    [238, 242, 248], [138, 134, 120], [206, 174, 110], [166, 178, 96],
+    [92, 148, 84], [40, 100, 58],
+  ],
+  // The overlap view: A and B are the two selection accents, and "both" is brighter than
+  // either, because whether it appears at all is the question the map is being asked.
+  overlap: [[22, 27, 34], [232, 178, 86], [123, 160, 216], [238, 242, 247]],
+};
+const paletteFor = (layer) => PALETTES[layer.name === "biome" ? "biome" : "overlap"];
+
 function rampColor(ramp, t) {
   t = Math.max(0, Math.min(1, t));
   for (let i = 1; i < ramp.length; i++) {
@@ -519,8 +580,10 @@ function drawMap(layer) {
   }
   if (!buffer) buffer = cellsCtx.createImageData(width, height);
 
-  const ramp = RAMPS[LAYER_RAMP[layer.name] || "heat"];
   const values = layer.values, land = layer.land;
+  if (layer.classes) { drawClasses(layer, values); return; }
+
+  const ramp = RAMPS[LAYER_RAMP[layer.name] || "heat"];
   let lo = layer.min, hi = layer.max;
 
   // Population density is heavily zero-inflated; a linear ramp against the maximum would make
@@ -547,14 +610,47 @@ function drawMap(layer) {
     buffer.data[p] = r; buffer.data[p + 1] = g; buffer.data[p + 2] = b; buffer.data[p + 3] = 255;
   }
 
-  cellsCtx.putImageData(buffer, 0, 0);
-  mapCtx.imageSmoothingEnabled = false;
-  mapCtx.drawImage(cells, 0, 0, map.width, map.height);
-
+  blit();
   $("layer-title").textContent = layer.label;
   $("legend-ramp").style.background = rampCss(LAYER_RAMP[layer.name] || "heat");
   $("legend-min").textContent = sci(log ? 0 : lo);
   $("legend-max").textContent = sci(hi);
+  showLegend(null);
+}
+
+// A layer of named classes. No normalisation, no ramp, and no water tint: what makes a cell
+// water is already one of the classes, so darkening it would only muddy the colour that says so.
+function drawClasses(layer, values) {
+  const palette = paletteFor(layer);
+  for (let i = 0; i < values.length; i++) {
+    const [r, g, b] = palette[values[i]] || [0, 0, 0];
+    const p = i * 4;
+    buffer.data[p] = r; buffer.data[p + 1] = g; buffer.data[p + 2] = b; buffer.data[p + 3] = 255;
+  }
+  blit();
+  $("layer-title").textContent = layer.label;
+  showLegend(layer);
+}
+
+function blit() {
+  cellsCtx.putImageData(buffer, 0, 0);
+  mapCtx.imageSmoothingEnabled = false;
+  mapCtx.drawImage(cells, 0, 0, map.width, map.height);
+}
+
+// Exactly one legend is in the flow at a time: a gradient with two numbers, or a key of swatches.
+function showLegend(layer) {
+  const classes = $("legend-classes");
+  for (const id of ["legend-min", "legend-ramp", "legend-max"]) {
+    $(id).classList.toggle("hidden", layer !== null);
+  }
+  classes.classList.toggle("hidden", layer === null);
+  if (layer === null) return;
+  const palette = paletteFor(layer);
+  classes.innerHTML = layer.classes.map((name, index) => {
+    const [r, g, b] = palette[index] || [0, 0, 0];
+    return `<span><i style="background:rgb(${r},${g},${b})"></i>${name}</span>`;
+  }).join("");
 }
 
 // One population-over-time plot, drawn for the whole biosphere and for a single species from
@@ -1134,22 +1230,40 @@ const creatureView = makeCreatureView($("creature"));
 const organismView = makeCreatureView($("organism-creature"));
 
 let selected = null;      // species id whose detail is open, or null for the whole biosphere
+let compare = null;       // a second id drawn beside it, so a split can be seen to be geographic
 let speciesEver = 0;
 let detailPending = false;
+
+// The one place the two selections are turned into a query, so the three callers that need one
+// cannot drift apart. A lone comparison means nothing, and the server would ignore it anyway.
+function speciesQuery() {
+  if (selected === null) return "";
+  return `&species=${selected}${compare === null ? "" : `&species_b=${compare}`}`;
+}
 
 async function refreshSpecies() {
   const payload = await api("/api/species");
   speciesEver = payload.species.length;
   $("s-species-ever").textContent = fmt(speciesEver);
   const list = $("species-list");
+  // Which rows are selected is markSelection's business, here and everywhere else, so the two
+  // selections are never painted from two different pieces of code.
   list.innerHTML = payload.species.map((s) => `
-    <li data-id="${s.species_id}" class="${s.extinct ? "gone" : ""}${s.species_id === selected ? " on" : ""}">
+    <li data-id="${s.species_id}" class="${s.extinct ? "gone" : ""}">
       <span class="id">${s.species_id}</span>
       <b>${s.extinct ? `extinct day ${fmt(s.extinct_day)}` : fmt(s.population)}</b>
     </li>`).join("");
   list.querySelectorAll("li").forEach((row) => {
-    row.onclick = () => select(Number(row.dataset.id) === selected ? null : Number(row.dataset.id));
+    row.onclick = (event) => {
+      const id = Number(row.dataset.id);
+      if (event.shiftKey && selected !== null && id !== selected) {
+        setCompare(id === compare ? null : id);
+      } else {
+        select(id === selected ? null : id);
+      }
+    };
   });
+  markSelection();
 }
 
 async function refreshDetail() {
@@ -1166,6 +1280,11 @@ async function refreshDetail() {
       : `day ${fmt(report.origin_day)}, from #${report.parent}`;
     $("d-end").textContent = report.extinct_day === null
       ? "—" : `day ${fmt(report.extinct_day)} (confirmed ${fmt(report.confirmed_day)})`;
+    // Written by the server from the occupancy distribution it sampled, so the sentence and
+    // the numbers behind it can never disagree.
+    const line = report.habitat === null ? "" : report.habitat.line;
+    $("d-habitat").classList.toggle("hidden", !line);
+    $("d-habitat").innerHTML = line ? `Lives in <b>${line}</b>.` : "";
     drawChart($("species-chart"), report.series);
     showCreature(creatureView, "creature-box", "d-body", report.morphology);
 
@@ -1357,17 +1476,37 @@ function verdict(o) {
 
 async function select(id) {
   selected = id;
+  // Nothing left to compare against: dropping the primary drops the pair, not half of it.
+  if (id === null || id === compare) compare = null;
   $("species-detail").classList.toggle("hidden", id === null);
   if (id === null) showCreature(creatureView, "creature-box", "d-body", null);
-  document.querySelectorAll("#species-list li").forEach((row) => {
-    row.classList.toggle("on", Number(row.dataset.id) === id);
-  });
+  markSelection();
   try {
-    render(await api(`/api/state?layer=${layerName()}${id === null ? "" : `&species=${id}`}`));
+    render(await api(`/api/state?layer=${layerName()}${speciesQuery()}`));
     await refreshDetail();
   } catch (error) {
     setStatus(error.message, "err");
   }
+}
+
+async function setCompare(id) {
+  compare = id;
+  markSelection();
+  try {
+    render(await api(`/api/state?layer=${layerName()}${speciesQuery()}`));
+  } catch (error) {
+    setStatus(error.message, "err");
+  }
+}
+
+function markSelection() {
+  document.querySelectorAll("#species-list li").forEach((row) => {
+    const id = Number(row.dataset.id);
+    row.classList.toggle("on", id === selected);
+    row.classList.toggle("on2", id !== selected && id === compare);
+  });
+  $("compare-chip").classList.toggle("hidden", compare === null);
+  $("compare-id").textContent = compare === null ? "—" : `#${compare}`;
 }
 
 function render(state) {
@@ -1444,7 +1583,9 @@ async function refreshSpeciesViews(force) {
 }
 
 async function stepOnce(ticks) {
-  const state = await post("/api/step", { ticks, layer: layerName(), species: selected });
+  const state = await post("/api/step", {
+    ticks, layer: layerName(), species: selected, species_b: selected === null ? null : compare,
+  });
   render(state);
   await refreshSpeciesViews(!playing);
 }
@@ -1483,9 +1624,11 @@ document.querySelectorAll(".speed").forEach((button) => {
   };
 });
 
+$("compare-clear").onclick = () => setCompare(null);
+
 $("layer").onchange = async () => {
   if (playing) return;  // the next step will pick the new layer up on its own
-  const filter = selected === null ? "" : `&species=${selected}`;
+  const filter = speciesQuery();
   render(await api(`/api/state?layer=${encodeURIComponent(layerName())}${filter}`));
 };
 
@@ -1505,6 +1648,7 @@ $("reset").onclick = async () => {
     // A reset is a different run, so the species and the organism selected in the old one no
     // longer exist.
     selected = null;
+    compare = null;
     $("species-detail").classList.add("hidden");
     closeOrganism("click the map to open one individual");
     render(state);

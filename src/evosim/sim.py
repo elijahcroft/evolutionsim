@@ -533,7 +533,7 @@ class Simulation:
             born = len(self.history.apply(day, self.population, splits))
         extinct = self.history.observe(day, self.population)
         if day % sim.sample_interval == 0:
-            self.history.sample(day, self.population)
+            self.history.sample(day, self.population, self.world.biomes().ravel())
         return born, extinct
 
     def _summarise(

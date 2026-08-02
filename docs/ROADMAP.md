@@ -8,8 +8,9 @@ we will know it landed.
 
 ## Where the project is
 
-M0–M6 are **complete**: 393 tests passing, a run you can watch in a browser, open a species in,
-and read what has changed in it since it appeared.
+M0–M11 are **complete**: 452 tests passing, a run you can watch in a browser, open a species in,
+read what has changed in it since it appeared, open one organism and read its own ledger, and see
+what kind of place each of them is standing in.
 
 | M | Deliverable | Status |
 | --- | --- | --- |
@@ -23,6 +24,7 @@ and read what has changed in it since it appeared.
 | 7 | Depth & light: a second way to make a living | complete (took two passes — see `DEVLOG.md`) |
 | 8 | The morphology genome, and the creature viewer brought forward from M9 | complete |
 | 10 | The organism inspector: open one individual and read its own ledger | complete |
+| 11 | Where they live: biomes, habitat lines, the two-species overlap map | complete |
 
 Two things measured at M6 shape everything below, and both are recorded rather than tuned away:
 no predatory lineage arises unaided, and **nothing speciates** — two *completely isolated*
@@ -46,13 +48,13 @@ legible; they do not become controllable.
 | ~~8~~ | The morphology genome — bodies stop being one number. **Done**, with the M9 viewer brought forward into it at ej's request. Thirteen loci; `body_size` and `body_slenderness` retired in favour of geometry integrated in `phenotype.py`; volume, surface area, frontal area, limb count and slenderness enter the cost equations through the existing `Costs`/`EnergyModel` seam, each factor written to evaluate to exactly 1.0 at founder proportions so nothing calibrated in M3/M7/M7b had to move. | ✅ |
 | ~~9~~ | The creature viewer — **folded into M8**. `buildCreature` ported from the spike into `src/evosim/ui/index.html`; body colour comes from diet rather than a `hue` gene. Outstanding: at 4,000 days two real species still look nearly alike, because morphology drifts slowly. | ✅ (see note) |
 | ~~10~~ | The organism inspector — **done.** `Simulation.inspect` re-evaluates the tick's own equations for one organism, `GET /api/organism/{id}` and `GET /api/cell/{cell}` expose it, and a map click opens the animal, its itemised ledger, its hazards by cause, and a sentence naming the largest of them. No new state: `_feed` was split so contention is computable without consuming the world, and the creature viewer became a factory so an individual gets its own body beside its species' average one. | ✅ |
-| **11** | Where they live — biomes, ranges, auto-written habitat | Two species on different depths get different habitat lines, generated not authored |
+| ~~11~~ | Where they live — biomes, ranges, auto-written habitat. **Done.** Ten biomes classified on demand from fields that already exist and stored nowhere; per-species occupancy sampled on the existing `SpeciesSample` cadence; `habitat_line` writes the sentence from the distribution; and the `?species=` range map generalised to two ids in two colours. One design correction on the way, recorded in `DEVLOG.md`: the deep/shallow cut had to be made on `transmittance` rather than on `light`, because a light-based cut called every polar cell "deep ocean" for half the year. | ✅ |
 | **12** | Parasites & disease | A host–parasite population cycle appears in the charts and virulence evolves |
 | **13** | Ornaments & mate choice | Ornament mean and preference mean covary; a preference-locked control shows no such drift |
 | **14** | Symbiosis & cooperation | A mutualist pair outperforms both partners alone; `sociality` stops being a dead locus |
 | **15** | The illustrated phylogeny, and run comparison | Read a run's history as a tree with a creature at each tip; 20 seeds × 2 planets compared |
 
-M7–M10 changes what the project is to look at. M12–M14 is what makes it worth looking at twice.
+M7–M11 changes what the project is to look at. M12–M14 is what makes it worth looking at twice.
 M15 is the payoff view.
 
 ### Why M7 came first, and what it settled
@@ -207,6 +209,9 @@ dying — which channel is short and what it is spending on. That is M6's "expla
 from the UI alone", moved down to the individual.
 
 ## M11 — Where they live
+
+**Built as specified, with one correction: the deep/shallow cut is on `transmittance`, not on
+`light`.** See `DEVLOG.md`. The rest of this section is what was planned and what landed.
 
 **Changes**
 

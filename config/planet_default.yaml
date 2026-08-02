@@ -96,6 +96,24 @@ resources:
   # food to the dark floor that can only inherit it, and it conserves matter exactly.
   detritus_sink_fraction: 0.10
 
+# ---- biomes -----------------------------------------------------------------------------
+# Where one kind of place stops and the next begins. These are cuts through fields the planet
+# already has -- nothing in life/ reads them, so moving one relabels the map without changing
+# what can live on it. The classification is recomputed on demand and never stored, which means
+# a high-latitude cell really does pass from polar ice to cold shelf and back over a year.
+biome:
+  freeze_c: 0.0        # at or below: polar ice on water, ice cap on land.
+  temperate_c: 10.0    # at or below (and lit): cold shelf on water, tundra on land.
+  tropical_c: 22.0     # above: tropical forest rather than forest.
+  # The deep/shallow cut. Photosynthesis reads insolation * transmittance; a *place* is dark
+  # because of the second factor and a *day* is dark because of the first, so the cut is made
+  # on transmittance alone -- otherwise every polar cell would be "deep ocean" for half the
+  # year. At the default attenuation of 0.75/km this puts the boundary near 1.85 km, which is
+  # roughly where M7 measured life thinning out.
+  photic_transmittance: 0.25
+  arid_moisture: 0.15  # below: desert.
+  humid_moisture: 0.50 # below: grassland; at or above: forest.
+
 # ---- toxicity --------------------------------------------------------------------------
 # A static hostile-chemistry field. Uniform by default; raise it to make the planet hostile.
 base_toxicity: 0.0

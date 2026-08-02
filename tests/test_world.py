@@ -10,6 +10,7 @@ import pytest
 from evosim.config import Config
 from evosim.rng import RngBundle
 from evosim.world import World
+from evosim.world.biome import BIOME_NAMES
 from evosim.world.climate import Climate, daily_insolation
 from evosim.world.grid import Grid
 from evosim.world.resources import Resources
@@ -253,6 +254,101 @@ def test_nothing_sinks_when_the_planet_says_it_does_not(config: Config):
     world.resources.detritus[:] = 1.0
     world.resources._sink(0.0)
     assert np.all(world.resources.detritus == 1.0)
+
+
+# -- biomes (milestone 11) ----------------------------------------------------------------
+
+WATER_BIOMES = {"polar ice", "deep ocean", "cold shelf", "warm shelf"}
+LAND_BIOMES = set(BIOME_NAMES) - WATER_BIOMES
+
+
+def _code(name: str) -> int:
+    return BIOME_NAMES.index(name)
+
+
+def test_every_cell_gets_exactly_one_biome(config: Config):
+    world = World.create(config.planet, RngBundle(config.sim.seed))
+    world.step(200)
+    codes = world.biomes()
+    assert codes.shape == world.grid.shape
+    assert codes.min() >= 0
+    assert codes.max() < len(BIOME_NAMES)
+
+
+def test_land_and_water_never_borrow_each_others_biomes(config: Config):
+    world = World.create(config.planet, RngBundle(config.sim.seed))
+    world.step(200)
+    codes = world.biomes()
+    water_codes = {_code(name) for name in WATER_BIOMES}
+    land_codes = {_code(name) for name in LAND_BIOMES}
+    assert set(np.unique(codes[world.terrain.water])) <= water_codes
+    assert set(np.unique(codes[world.terrain.land])) <= land_codes
+
+
+def test_the_deep_ocean_is_exactly_the_water_a_column_has_darkened(config: Config):
+    """The class is cut on transmittance, so it means what the energy model means by dark."""
+
+    world = World.create(config.planet, RngBundle(config.sim.seed))
+    world.step(200)
+    codes = world.biomes()
+    dark = world.terrain.water & (
+        world.transmittance < config.planet.biome.photic_transmittance
+    )
+    assert np.array_equal(codes == _code("deep ocean"), dark)
+
+
+def test_polar_night_does_not_turn_the_shallows_into_deep_ocean(config: Config):
+    """A place is dark because of its water column; a day is dark because of its sun."""
+
+    planet = replace(config.planet, axial_tilt=35.0)
+    world = World.create(planet, RngBundle(config.sim.seed))
+    deep = world.biomes() == _code("deep ocean")
+    darkest_shallow = np.inf
+    for _ in range(planet.year_length_days // 10):
+        world.step(10)
+        # The set never moves, even though the light over it does.
+        assert np.array_equal(world.biomes() == _code("deep ocean"), deep)
+        darkest_shallow = min(darkest_shallow, world.light[world.terrain.water & ~deep].min())
+    # And a light-based cut really would have moved it: some shallow cell in polar winter is
+    # dimmer than the brightest cell of the deep ocean is at noon.
+    assert darkest_shallow < world.light[deep].max()
+
+
+def test_a_planet_in_clear_water_has_no_deep_ocean():
+    """Biome is a reading of the world, so removing the cause removes the class."""
+
+    config = Config.load(overrides=["planet.climate.light_attenuation_per_km=0.0"])
+    world = World.create(config.planet, RngBundle(config.sim.seed))
+    world.step(50)
+    assert not np.any(world.biomes() == _code("deep ocean"))
+
+
+def test_biomes_follow_the_season_rather_than_being_fixed_at_creation(config: Config):
+    """Nothing is stored, so the map moves when the fields it reads move."""
+
+    planet = replace(config.planet, axial_tilt=35.0)
+    world = World.create(planet, RngBundle(config.sim.seed))
+    world.step(200)
+    summer = world.biomes().copy()
+    world.step(planet.year_length_days // 2)
+    assert not np.array_equal(summer, world.biomes())
+
+
+def test_a_dry_planet_grows_deserts(config: Config):
+    """The reference planet has none -- its warm land is all coastal-wet -- but they exist."""
+
+    assert not np.any(
+        World.create(config.planet, RngBundle(config.sim.seed)).biomes() == _code("desert")
+    )
+    dry = Config.load(
+        overrides=[
+            "planet.terrain.land_fraction=0.6",
+            "planet.climate.moisture_decay_per_cell=0.3",
+        ]
+    )
+    world = World.create(dry.planet, RngBundle(dry.sim.seed))
+    world.step(200)
+    assert np.any(world.biomes() == _code("desert"))
 
 
 def test_world_is_reproducible(config: Config):

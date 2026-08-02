@@ -11,6 +11,7 @@ from evosim.history.records import (
     Sample,
     SpeciesRecord,
     SpeciesSample,
+    habitat_line,
     trait_means,
 )
 
@@ -20,5 +21,6 @@ __all__ = [
     "Sample",
     "SpeciesRecord",
     "SpeciesSample",
+    "habitat_line",
     "trait_means",
 ]

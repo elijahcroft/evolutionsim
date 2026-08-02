@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 
 from evosim.config import PlanetConfig
 from evosim.rng import RngBundle
+from evosim.world.biome import classify
 from evosim.world.climate import Climate
 from evosim.world.grid import Grid
 from evosim.world.resources import Resources
@@ -80,6 +81,16 @@ class World:
             self.light = self.climate.insolation * self.transmittance
             self.resources.step(self.terrain, self.climate, self.config)
 
+    def biomes(self) -> NDArray[np.int8]:
+        """What kind of place each cell is today, as a code into ``BIOME_NAMES``.
+
+        Derived on demand and never stored, for the reason given in ``biome.py``: a kept copy
+        would be a second description of the planet, free to disagree with the first.  It moves
+        with the season, because the fields it reads do.
+        """
+
+        return classify(self.terrain, self.transmittance, self.climate, self.config.biome)
+
     def arrays(self) -> dict[str, NDArray[np.generic]]:
         """Named arrays for diagnostics and stable, headless output."""
         return {
@@ -93,4 +104,5 @@ class World:
             "nutrients": self.resources.nutrients,
             "detritus": self.resources.detritus,
             "toxicity": self.toxicity,
+            "biome": self.biomes(),
         }

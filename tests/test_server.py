@@ -14,6 +14,7 @@ from evosim.server.app import (
     create_app,
 )
 from evosim.sim import Simulation
+from evosim.world.biome import BIOME_NAMES
 
 
 @pytest.fixture(scope="module")
@@ -209,6 +210,81 @@ def test_filtering_by_a_species_that_never_existed_is_a_404(client: TestClient) 
     assert client.post("/api/step", json={"ticks": 1, "species": 3}).status_code == 404
     # ...and the rejected step did not advance the world on its way to failing.
     assert client.get("/api/state").json()["day"] == 0
+
+
+# -- where they live (milestone 11) -------------------------------------------------------
+
+
+def test_a_continuous_layer_carries_no_classes(client: TestClient) -> None:
+    assert client.get("/api/state?layer=temperature_c").json()["layer"]["classes"] is None
+
+
+def test_the_biome_layer_is_named_classes_rather_than_a_quantity(client: TestClient) -> None:
+    layer = client.get("/api/state?layer=biome").json()["layer"]
+    assert layer["classes"] == list(BIOME_NAMES)
+    assert all(0 <= value < len(BIOME_NAMES) for value in layer["values"])
+    assert all(float(value).is_integer() for value in layer["values"])
+    # A planet worth looking at is not one colour.
+    assert len(set(layer["values"])) > 1
+
+
+def test_two_species_can_be_drawn_on_one_map(config: Config) -> None:
+    """The overlap view: whether a split was geographic is whether 'both' appears."""
+
+    client = diverged_client(
+        Config.load(DEFAULT_CONFIG_DIR, overrides=["sim.seed=11", "sim.taxonomy_interval=2"])
+    )
+    client.post("/api/step", json={"ticks": 2})
+    overlap = client.get("/api/state?layer=population&species=0&species_b=1").json()["layer"]
+    assert overlap["species"] == 0 and overlap["species_b"] == 1
+    assert overlap["classes"] == ["empty", "species 0", "species 1", "both"]
+    assert "0 vs 1" in overlap["label"]
+
+    # The classes are exactly the two range maps it is drawn from, cell by cell.
+    here = client.get("/api/state?layer=population&species=0").json()["layer"]["values"]
+    there = client.get("/api/state?layer=population&species=1").json()["layer"]["values"]
+    expected = [(a > 0) + 2 * (b > 0) for a, b in zip(here, there)]
+    assert overlap["values"] == expected
+
+
+def test_a_comparison_needs_both_halves(client: TestClient) -> None:
+    """A lone second id is as meaningless as a filter on a layer that cannot take one."""
+
+    layer = client.get("/api/state?layer=population&species_b=0").json()["layer"]
+    assert layer["species_b"] is None
+    assert layer["classes"] is None
+    other = client.get("/api/state?layer=temperature_c&species=0&species_b=0").json()["layer"]
+    assert other["species"] is None and other["species_b"] is None
+
+
+def test_comparing_against_a_species_that_never_existed_is_a_404(client: TestClient) -> None:
+    assert client.get("/api/state?layer=population&species=0&species_b=3").status_code == 404
+    assert (
+        client.post("/api/step", json={"ticks": 1, "species": 0, "species_b": 3}).status_code
+        == 404
+    )
+    assert client.get("/api/state").json()["day"] == 0
+
+
+def test_a_species_report_carries_where_it_lives(config: Config) -> None:
+    """The habitat line is written from the occupancy numbers beside it, never authored."""
+
+    client = TestClient(
+        create_app(
+            Config.load(DEFAULT_CONFIG_DIR, overrides=["sim.seed=11", "sim.sample_interval=2"])
+        )
+    )
+    client.post("/api/step", json={"ticks": 4})
+    habitat = client.get("/api/species/0").json()["habitat"]
+
+    assert habitat["names"] == list(BIOME_NAMES)
+    assert sum(habitat["fractions"]) == pytest.approx(1.0)
+    assert habitat["day"] == 4
+    # Every biome the sentence names is one the distribution actually gives it.
+    named = [name for name in BIOME_NAMES if name in habitat["line"]]
+    assert named
+    for name in named:
+        assert habitat["fractions"][BIOME_NAMES.index(name)] > 0.0
 
 
 def test_a_species_report_carries_the_body_the_viewer_draws(client: TestClient) -> None:

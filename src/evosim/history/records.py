@@ -30,11 +30,19 @@ from evosim.config import Config
 from evosim.evolution.taxonomy import Split
 from evosim.life.phenotype import DIET_NAMES, MORPHOLOGY_NAMES
 from evosim.life.population import UNASSIGNED, Population
+from evosim.world.biome import BIOME_NAMES
 
 FloatArray: TypeAlias = NDArray[np.float64]
 IntArray: TypeAlias = NDArray[np.int64]
 
 FOUNDER_SPECIES = 0
+
+#: A biome has to hold at least this share of a species before the habitat line names it, and
+#: the line names at most this many.  Both exist so the sentence stays a sentence: a species
+#: spread thinly over nine biomes has no habitat worth naming, and saying so is more use than
+#: reciting nine numbers.
+HABITAT_FLOOR = 0.1
+HABITAT_TERMS = 3
 
 
 @dataclass(slots=True)
@@ -80,6 +88,8 @@ class SpeciesSample:
     mean_age: float
     mean_energy: float
     traits: tuple[float, ...]
+    #: Share of this species' members standing in each biome, in ``BIOME_NAMES`` order.
+    habitat: tuple[float, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -88,6 +98,7 @@ class SpeciesSample:
             "mean_age": self.mean_age,
             "mean_energy": self.mean_energy,
             "traits": list(self.traits),
+            "habitat": list(self.habitat),
         }
 
 
@@ -113,6 +124,7 @@ class History:
 
     extinction_confirm_ticks: int
     trait_names: tuple[str, ...]
+    biome_names: tuple[str, ...] = BIOME_NAMES
     records: dict[int, SpeciesRecord] = field(default_factory=dict)
     samples: list[Sample] = field(default_factory=list)
     _next_species: int = 0
@@ -241,8 +253,14 @@ class History:
                 confirmed += 1
         return confirmed
 
-    def sample(self, day: int, population: Population) -> Sample:
-        """Record one point of the per-species time series."""
+    def sample(self, day: int, population: Population, biome: IntArray) -> Sample:
+        """Record one point of the per-species time series.
+
+        ``biome`` is the day's classification flattened to one code per cell.  It is passed in
+        rather than derived here because this module deliberately knows about arrays and not
+        about the world layer -- and because the classification is a read of the world that the
+        caller already has to have made.
+        """
 
         active = population.active
         species = population.species_id[active].astype(np.int64)
@@ -253,6 +271,15 @@ class History:
 
         def totals(values: FloatArray) -> FloatArray:
             return np.bincount(species, weights=values, minlength=counts.size)
+
+        # Where each organism is standing, counted per (species, biome) in one pass: the pair is
+        # folded into a single index so this stays one bincount rather than one per species.
+        n_biomes = len(self.biome_names)
+        codes = np.asarray(biome).ravel()[population.cell[active].astype(np.intp)]
+        occupancy = np.bincount(
+            species * n_biomes + codes.astype(np.int64),
+            minlength=counts.size * n_biomes,
+        ).reshape(counts.size, n_biomes)
 
         # One bincount per locus rather than a scatter-add: the loop is over the loci and
         # never over organisms, which is the rule the hot path is held to as well.
@@ -270,6 +297,9 @@ class History:
                 mean_energy=float(energy_totals[identity] / counts[identity]),
                 traits=tuple(
                     float(value) for value in trait_totals[identity] / counts[identity]
+                ),
+                habitat=tuple(
+                    float(value) for value in occupancy[identity] / counts[identity]
                 ),
             )
             for identity in np.flatnonzero(counts)
@@ -373,7 +403,28 @@ class History:
             "series": series,
             "drift": drift,
             "morphology": self._morphology(population, rows, reference),
+            "habitat": self._habitat(species),
         }
+
+    def _habitat(self, species: int) -> dict[str, Any] | None:
+        """Where this species was last seen living, and a sentence saying so.
+
+        Read off the most recent sample that contains it rather than recounted live, for two
+        reasons: it needs no ``World``, so ``report`` stays a pure read of what was recorded;
+        and an extinct species keeps the habitat it had instead of losing it at the moment the
+        question becomes historical.
+        """
+
+        for sample in reversed(self.samples):
+            for entry in sample.species:
+                if entry.species_id == species:
+                    return {
+                        "day": sample.day,
+                        "names": list(self.biome_names),
+                        "fractions": list(entry.habitat),
+                        "line": habitat_line(entry.habitat, self.biome_names),
+                    }
+        return None
 
     def _morphology(
         self,
@@ -422,12 +473,41 @@ class History:
         return {
             "format": 1,
             "trait_names": list(self.trait_names),
+            "biome_names": list(self.biome_names),
             "extinction_confirm_ticks": self.extinction_confirm_ticks,
             "species": [
                 self.records[species].to_dict() for species in sorted(self.records)
             ],
             "samples": [sample.to_dict() for sample in self.samples],
         }
+
+
+def habitat_line(fractions: tuple[float, ...], names: tuple[str, ...]) -> str:
+    """Name the places a species actually lives, biggest share first.
+
+    Generated from the occupancy numbers and never authored: the sentence contains nothing the
+    distribution above it does not, which is the same rule the organism inspector's verdict is
+    held to.  The floor and the term limit are what keep it a sentence -- a species spread over
+    every biome is described by its largest three and the rest go unnamed rather than reciting
+    ten numbers as prose.  Only a species with no members at all gets no line.
+    """
+
+    ranked = sorted(
+        (
+            (share, name)
+            for share, name in zip(fractions, names)
+            if share >= HABITAT_FLOOR
+        ),
+        reverse=True,
+    )
+    if not ranked:
+        return ""
+    return "; ".join(
+        f"{name}, {share * 100:.0f}% of its range"
+        if index == 0
+        else f"{name}, {share * 100:.0f}%"
+        for index, (share, name) in enumerate(ranked[:HABITAT_TERMS])
+    )
 
 
 def trait_means(population: Population, rows: IntArray) -> tuple[float, ...]:
@@ -445,5 +525,6 @@ __all__ = [
     "Sample",
     "SpeciesRecord",
     "SpeciesSample",
+    "habitat_line",
     "trait_means",
 ]

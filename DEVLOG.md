@@ -5,6 +5,117 @@ and what the next task is.
 
 ---
 
+## Milestone 11 — where they live
+
+**Status: complete.** 452 tests passing. The map can say what kind of place a cell is, a species
+panel says where its members actually live in a sentence nobody wrote, and two species can be
+drawn on one map in two colours so that "was the split geographic?" is a question you answer by
+looking rather than by reasoning about trait tables.
+
+### A biome is a reading of the world, not a layer of it
+
+`world/biome.py` classifies every cell into one of ten biomes from the land mask, the water
+column, the temperature and the moisture — all fields that already existed. Nothing is stored.
+`World.biomes()` recomputes on demand and `World` gained no field, which follows the same rule
+M10 was built to: if a number is not already in the world, the reading does not invent it.
+
+That is not fastidiousness. A stored biome would be a *second* description of the planet, free to
+drift out of step with the first, and an organism could then be sitting in a cell labelled desert
+while the moisture the energy model charges it for says otherwise. Because the classification is
+derived, that disagreement is not merely unlikely — it is unrepresentable.
+
+The consequence is that biomes **move**. `temperature_c` relaxes toward equilibrium every tick and
+`moisture` and `light` are recomputed from the day's insolation, so a high-latitude cell genuinely
+passes from polar ice to cold shelf and back over a year. That is the honest answer on a planet
+with an axial tilt, and it is why the per-species record is a sampled *distribution* over biomes
+rather than a lookup.
+
+### The one thing the design got wrong, and the test that caught it
+
+The deep ocean was first cut on `light` — the same quantity `EnergyModel.photosynthesis` reads —
+on the reasoning that "deep" should mean "where autotrophy is impossible" by the one number that
+decides it, rather than by a second definition in kilometres free to drift away from it.
+
+That reasoning was right about the goal and wrong about the quantity. `light` is
+`insolation × transmittance`: a *place* is dark because of the second factor, and a *day* is dark
+because of the first. On a planet in perfectly clear water — attenuation zero, a test written to
+assert that removing the cause removes the class — every polar cell classified as deep ocean,
+because polar night is dark. The cut moved to `transmittance`, which is the same attenuation
+physics with the season taken out, and gained a test of its own: over a full year at 35° of tilt
+the deep-ocean set never changes by a cell, while some shallow cell in polar winter is genuinely
+dimmer than the brightest cell of the abyss is at noon.
+
+At the default 0.75/km attenuation the boundary lands near 1.85 km, which is roughly where M7
+measured life thinning out.
+
+### The reference planet has no deserts
+
+Every biome but one is populated on Terra. `desert` is empty, and the reason is worth recording
+rather than tuning away: the driest land on the reference planet is all *cold* land, which the
+first-match-wins chain claims as tundra before the moisture test runs, and its warm land is all
+coastal-wet — the driest non-cold cell sits at 0.17 moisture against a 0.15 threshold. Deserts are
+reachable and a test asserts it, on a planet with 60% land and thrice the moisture decay, where
+they take 22% of the surface. Terra is simply a wet world with small continents.
+
+### Completed
+
+- **`src/evosim/world/biome.py`** — `BIOME_NAMES` and `classify`, one `np.select` over the grid.
+  The loop is over the ten classes and never over the cells.
+- **`config/planet_default.yaml`** + `BiomeConfig` — six thresholds, with a cross-field check that
+  they ascend, because out-of-order thresholds do not look wrong, they silently empty a class.
+- **`src/evosim/history/records.py`** — `SpeciesSample.habitat`, a per-(species, biome) occupancy
+  folded into one `bincount`, and `habitat_line`, which writes the sentence. `report()` reads it
+  off the most recent sample rather than recounting live: it needs no `World`, and an extinct
+  species keeps the habitat it had instead of losing it the moment the question becomes
+  historical.
+- **`src/evosim/server/app.py`** — a `biome` layer, and an optional `classes` key on the layer
+  payload. The overlap view is the same mechanism used twice: `species=A&species_b=B` returns
+  values 0–3 with the names `empty / species A / species B / both`. Every continuous layer's shape
+  is unchanged, so nothing that reads one had to learn about any of this.
+- **`src/evosim/ui/index.html`** — a categorical branch in `drawMap` that indexes a palette
+  instead of interpolating a ramp, a swatch legend that swaps in for the gradient, the habitat
+  line in the species panel, and shift-click to set a comparison — with a visible, clearable chip,
+  because a state you can enter with a modifier and not see is a state you get stuck in.
+- **`tools/render_world.py`** — a biome panel with a named colour bar, in a 3×3 grid.
+
+### The acceptance criterion
+
+*Two species at different depths get different habitat lines, generated not authored.* Asserted
+directly in `tests/test_history.py`: two lineages housed on opposite sides of the photic boundary
+report `"deep ocean, 100% of its range"` and `"warm shelf, 100% of its range"`.
+
+In a real run — seed 42, day 4,000, two living species — the panels read *"Lives in warm shelf,
+78% of its range; tropical forest, 10%"* and *"Lives in warm shelf, 89% of its range"*: a
+generalist that spills onto land and a wholly marine daughter. The overlap map shows why the two
+lines are close, and it is the more informative view of the pair: 2,396 cells species 0 alone,
+46 species 1 alone, 467 both. The split is partial and geographic at its edges.
+
+Tick throughput is **22.0 ms/tick at 40,000 organisms, 1.30 M organisms/s** — unchanged from M8
+and M10, as it must be: every line of this milestone is on the cold path or the HTTP boundary.
+
+### Known limitations
+
+- **The habitat line is as old as the last sample**, up to `sim.sample_interval` days. That is the
+  cadence the roadmap specified and the reason the number is cheap, but a species that moved
+  yesterday still reads as living where it was.
+- **`desert` never appears on the reference planet**, for the reason above. The class is carried
+  because the thresholds are a dial and other planets do produce it, but on Terra it is a legend
+  entry that never lights up.
+- **Ten classes is a judgement, not a measurement.** Nothing in `life/` reads a biome, so the
+  boundaries cost nothing and buy nothing except legibility; they were chosen to make the
+  reference planet's map readable and could be wrong for a planet nobody has run yet.
+- **The overlap view takes exactly two species.** Three would need a different encoding than four
+  classes, and two is the number the question "did this split?" actually asks about.
+
+### Next task — Milestone 12: parasites and disease
+
+A new tick phase between hunt and reap, `virulence`/`transmissibility`/`immune_investment` loci,
+one `int32` of infection state on `Population`, and a new named RNG stream — free by name, by
+design, since M0. The first milestone since M7 to touch the tick loop. Note the roadmap's standing
+reminder: there is no generic event log, and M12 is when to add one.
+
+---
+
 ## Milestone 10 — the organism inspector
 
 **Status: complete.** 427 tests passing. Click a cell on the map and you open one animal: its own

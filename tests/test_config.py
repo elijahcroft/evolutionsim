@@ -320,6 +320,28 @@ def test_out_of_range_values_are_rejected(raw, section, key, value, match):
         Config.from_raw(raw)
 
 
+def test_unknown_biome_key_is_rejected_by_its_full_path(raw):
+    raw["planet"]["biome"]["swamp_moisture"] = 0.7
+    with pytest.raises(ConfigError, match=r"planet\.biome: unrecognised key"):
+        Config.from_raw(raw)
+
+
+@pytest.mark.parametrize(
+    "key,value,match",
+    [
+        ("temperate_c", -5.0, "must ascend"),
+        ("tropical_c", 5.0, "must ascend"),
+        ("arid_moisture", 0.9, "must be below"),
+    ],
+)
+def test_out_of_order_biome_thresholds_are_rejected(raw, key, value, match):
+    """Out of order does not merely look odd -- first-match-wins silently empties a class."""
+
+    raw["planet"]["biome"][key] = value
+    with pytest.raises(ConfigError, match=match):
+        Config.from_raw(raw)
+
+
 def test_wrong_type_is_rejected(raw):
     raw["planet"]["gravity"] = "heavy"
     with pytest.raises(ConfigError, match="expected a number"):

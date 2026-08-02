@@ -302,6 +302,46 @@ class ResourceConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class BiomeConfig:
+    """Where one kind of place stops and the next begins.
+
+    These are cuts through fields the planet already has, not new physics: nothing in ``life/``
+    reads them, and changing one renames the map rather than changing what lives on it.
+    """
+
+    freeze_c: float
+    temperate_c: float
+    tropical_c: float
+    photic_transmittance: float
+    arid_moisture: float
+    humid_moisture: float
+
+    @classmethod
+    def from_reader(cls, r: _Reader) -> BiomeConfig:
+        cfg = cls(
+            freeze_c=r.num("freeze_c"),
+            temperate_c=r.num("temperate_c"),
+            tropical_c=r.num("tropical_c"),
+            photic_transmittance=r.num("photic_transmittance", low=0.0, high=1.0),
+            arid_moisture=r.num("arid_moisture", low=0.0, high=1.0),
+            humid_moisture=r.num("humid_moisture", low=0.0, high=1.0),
+        )
+        r.done()
+        # The thresholds are read in order by a chain of first-match-wins conditions, so an
+        # out-of-order set does not merely look odd -- it silently empties a class.
+        if not cfg.freeze_c < cfg.temperate_c < cfg.tropical_c:
+            raise ConfigError(
+                "planet.biome temperature thresholds must ascend: "
+                "freeze_c < temperate_c < tropical_c"
+            )
+        if cfg.arid_moisture >= cfg.humid_moisture:
+            raise ConfigError(
+                "planet.biome.arid_moisture must be below biome.humid_moisture"
+            )
+        return cfg
+
+
+@dataclass(frozen=True, slots=True)
 class PlanetConfig:
     name: str
     grid_width: int
@@ -319,6 +359,7 @@ class PlanetConfig:
     terrain: TerrainConfig
     climate: ClimateConfig
     resources: ResourceConfig
+    biome: BiomeConfig
     base_toxicity: float
     toxicity_elevation_coupling: float
 
@@ -348,6 +389,7 @@ class PlanetConfig:
             terrain=TerrainConfig.from_reader(r.section("terrain")),
             climate=ClimateConfig.from_reader(r.section("climate")),
             resources=ResourceConfig.from_reader(r.section("resources")),
+            biome=BiomeConfig.from_reader(r.section("biome")),
             base_toxicity=r.num("base_toxicity", low=0.0),
             toxicity_elevation_coupling=r.num("toxicity_elevation_coupling", low=0.0),
         )

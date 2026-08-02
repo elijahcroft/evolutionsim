@@ -14,9 +14,10 @@ import numpy as np
 import pytest
 
 from evosim.config import Config
-from evosim.history import FOUNDER_SPECIES, History
+from evosim.history import FOUNDER_SPECIES, History, habitat_line
 from evosim.rng import RngBundle
 from evosim.sim import Simulation
+from evosim.world.biome import BIOME_NAMES
 
 
 def small(overrides: list[str] | None = None) -> Config:
@@ -29,6 +30,11 @@ def small(overrides: list[str] | None = None) -> Config:
             *(overrides or []),
         ]
     )
+
+
+def biomes(simulation: Simulation) -> np.ndarray:
+    """The day's biome codes, one per cell, in the shape ``History.sample`` wants them."""
+    return simulation.world.biomes().ravel()
 
 
 def diverged(simulation: Simulation, rows: slice) -> None:
@@ -193,7 +199,7 @@ def test_peak_population_records_when_a_species_was_at_its_largest():
 def test_a_sample_breaks_the_population_down_by_species():
     simulation = Simulation.create(small())
     split_once(simulation)
-    sample = simulation.history.sample(10, simulation.population)
+    sample = simulation.history.sample(10, simulation.population, biomes(simulation))
     assert sample.day == 10
     assert sample.population == simulation.population.size
     assert [entry.species_id for entry in sample.species] == [0, 1]
@@ -204,7 +210,7 @@ def test_sampled_trait_means_are_the_species_means():
     simulation = Simulation.create(small())
     split_once(simulation)
     population = simulation.population
-    sample = simulation.history.sample(10, population)
+    sample = simulation.history.sample(10, population, biomes(simulation))
     index = population.schema.index_of("body_length")
     for entry in sample.species:
         members = population.species_id[population.active] == entry.species_id
@@ -225,6 +231,102 @@ def test_an_extinct_biosphere_still_samples():
     simulation.step()
     assert simulation.population.size == 0
     assert simulation.history.samples[-1].species == ()
+
+
+# -- where they live (milestone 11) -------------------------------------------------------------------
+
+
+def _cells_of(simulation: Simulation, biome: str) -> np.ndarray:
+    codes = biomes(simulation)
+    return np.flatnonzero(codes == BIOME_NAMES.index(biome))
+
+
+def _house(simulation: Simulation, species: int, biome: str) -> None:
+    """Move every member of a species into cells of one biome, and nowhere else."""
+    population = simulation.population
+    active = population.active
+    rows = np.flatnonzero(population.species_id[active] == species)
+    cells = _cells_of(simulation, biome)
+    assert cells.size, f"the test planet has no {biome}"
+    population.cell[active][rows] = cells[np.arange(rows.size) % cells.size]
+
+
+def test_habitat_occupancy_is_a_distribution_over_the_biomes():
+    simulation = Simulation.create(small())
+    split_once(simulation)
+    sample = simulation.history.sample(10, simulation.population, biomes(simulation))
+    for entry in sample.species:
+        assert len(entry.habitat) == len(BIOME_NAMES)
+        assert sum(entry.habitat) == pytest.approx(1.0)
+        assert all(share >= 0.0 for share in entry.habitat)
+
+
+def test_sampled_occupancy_matches_a_hand_recount():
+    simulation = Simulation.create(small())
+    split_once(simulation)
+    population = simulation.population
+    codes = biomes(simulation)
+    sample = simulation.history.sample(10, population, codes)
+    where = codes[population.cell[population.active].astype(np.intp)]
+    for entry in sample.species:
+        members = population.species_id[population.active] == entry.species_id
+        for index in range(len(BIOME_NAMES)):
+            expected = (where[members] == index).mean()
+            assert entry.habitat[index] == pytest.approx(float(expected))
+
+
+def test_the_habitat_line_names_the_largest_shares_biggest_first():
+    fractions = [0.0] * len(BIOME_NAMES)
+    fractions[BIOME_NAMES.index("deep ocean")] = 0.3
+    fractions[BIOME_NAMES.index("cold shelf")] = 0.62
+    fractions[BIOME_NAMES.index("tundra")] = 0.08
+    line = habitat_line(tuple(fractions), BIOME_NAMES)
+    assert line == "cold shelf, 62% of its range; deep ocean, 30%"
+    # The 8% is below the floor, so it is not named at all rather than named and ignored.
+    assert "tundra" not in line
+
+
+def test_the_habitat_line_stays_a_sentence_when_a_species_is_everywhere():
+    even = tuple(1.0 / len(BIOME_NAMES) for _ in BIOME_NAMES)
+    assert habitat_line(even, BIOME_NAMES).count(";") == 2
+    # And a species with no members has nothing to say rather than a line of zeroes.
+    assert habitat_line(tuple(0.0 for _ in BIOME_NAMES), BIOME_NAMES) == ""
+
+
+def test_two_species_on_different_depths_get_different_habitat_lines():
+    """The milestone 11 criterion: the text is derived from occupancy, never authored."""
+
+    simulation = Simulation.create(small(["sim.sample_interval=1"]))
+    split_once(simulation)
+    _house(simulation, 0, "warm shelf")
+    _house(simulation, 1, "deep ocean")
+    simulation.history.sample(1, simulation.population, biomes(simulation))
+
+    shallow = simulation.history.report(0, simulation.population)["habitat"]
+    deep = simulation.history.report(1, simulation.population)["habitat"]
+    assert shallow["line"] == "warm shelf, 100% of its range"
+    assert deep["line"] == "deep ocean, 100% of its range"
+    assert shallow["line"] != deep["line"]
+
+
+def test_an_extinct_species_keeps_the_habitat_it_had():
+    """``report`` reads the last sample rather than recounting, so history survives the end."""
+
+    simulation = Simulation.create(small(["sim.sample_interval=1"]))
+    split_once(simulation)
+    _house(simulation, 1, "deep ocean")
+    simulation.history.sample(1, simulation.population, biomes(simulation))
+
+    population = simulation.population
+    population.remove(population.species_id[population.active] == 1)
+    report = simulation.history.report(1, simulation.population)
+    assert report["current_traits"] is None
+    assert report["habitat"]["line"] == "deep ocean, 100% of its range"
+
+
+def test_a_species_never_sampled_reports_no_habitat():
+    simulation = Simulation.create(small())
+    assert simulation.history.report(0, simulation.population)["habitat"] is None
 
 
 # -- serialization ------------------------------------------------------------------------------------
@@ -258,7 +360,7 @@ def test_history_is_bookkeeping_and_never_read_by_the_tick():
     noisy = Simulation.create(small())
     for _ in range(40):
         noisy.step()
-        noisy.history.sample(noisy.day, noisy.population)
+        noisy.history.sample(noisy.day, noisy.population, biomes(noisy))
     assert noisy.population.size == baseline.population.size
     assert np.array_equal(
         noisy.population.organism_id[noisy.population.active],

@@ -88,7 +88,7 @@ from `(config, seed)`.
 
 Play, pause, or single-step the world; switch the map between population density, temperature,
 elevation, water depth, nutrients, detritus, moisture, surface insolation, light at depth, and
-toxicity; read the tick's energy ledger and cause-of-death breakdown beside it. Space toggles
+toxicity, and biome; read the tick's energy ledger and cause-of-death breakdown beside it. Space toggles
 play, `s` steps. Comparing the insolation and light layers is the quickest way to see why life
 sits where it does.
 
@@ -104,6 +104,16 @@ cause, and a sentence saying which of those numbers is deciding its life — *"i
 more than it earns each day, so its reserve is gone in about 5 days; the largest cost is basal"*.
 Nothing is recorded for that panel: the server re-runs the tick's own equations for that one
 organism, in the world as it stands, and writes none of it back.
+
+**The biome layer says what kind of place each cell is** — deep ocean, cold shelf, tundra,
+tropical forest, ten in all — read off the temperature, moisture, land mask and water column the
+planet already has. It is a classification, not a layer of the world: nothing is stored and
+nothing in `life/` consults it, so a cell's biome can never disagree with the numbers an organism
+standing there is actually charged for. It moves with the season, because those numbers do. Each
+species panel then writes a habitat line from where its members were last counted standing —
+*"Lives in warm shelf, 78% of its range; tropical forest, 10%"* — generated from the
+distribution, never authored. Shift-click a second species to draw both ranges on one map in two
+colours, which answers whether a split was geographic in one look.
 
 Time only advances when the browser asks for it — there is no background thread — so a session
 driven from the UI produces exactly the run `evosim --ticks N` produces from the same
